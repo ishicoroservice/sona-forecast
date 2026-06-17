@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ソナ予報</title>
+<title>ソナ予報 フェッチャー</title>
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-180.png">
@@ -113,6 +113,17 @@ button:active{transform:translateY(1px)}
 #status.err{color:var(--strong);background:rgba(242,162,92,.08);border:1px solid rgba(242,162,92,.25);border-radius:9px;padding:11px 13px;line-height:1.5}
 #status.err b{color:var(--frost)}
 
+/* 同名の山 候補リスト */
+.cand{display:flex;flex-direction:column;gap:7px;margin:8px 0 0}
+.cand:empty{margin:0}
+.cand-hint{font-size:12px;color:var(--mist);margin:0 2px 2px}
+.cand-btn{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;cursor:pointer;
+  background:var(--abyss);border:1px solid var(--line);border-radius:9px;padding:10px 13px;font-family:var(--body);color:var(--frost);transition:border-color .15s}
+.cand-btn:hover{border-color:var(--sky)}
+.cand-btn:focus-visible{outline:2px solid var(--sky);outline-offset:1px}
+.cand-btn .cn{font-size:14px;font-weight:600}
+.cand-btn .cm{font-family:var(--mono);font-size:12px;color:var(--mist);white-space:nowrap}
+
 /* results */
 #results{display:none}
 #results.show{display:block;animation:fade .3s ease}
@@ -219,6 +230,7 @@ footer a{color:var(--mist)}
       </label>
       <button class="btn-go" id="go">予報を取得</button>
     </div>
+    <div id="cand" class="cand"></div>
     <p id="status"></p>
   </div>
 
@@ -305,6 +317,9 @@ const PRESETS = [
 ];
 
 const WMO = {0:["☀️","快晴"],1:["🌤️","晴れ"],2:["⛅","薄曇り"],3:["☁️","曇り"],45:["🌫️","霧"],48:["🌫️","着氷霧"],51:["🌦️","霧雨"],53:["🌦️","霧雨"],55:["🌧️","強い霧雨"],56:["🌧️","着氷性霧雨"],57:["🌧️","着氷性霧雨"],61:["🌦️","弱い雨"],63:["🌧️","雨"],65:["☔","強い雨"],66:["🌧️","着氷性の雨"],67:["🌧️","着氷性の雨"],71:["🌨️","弱い雪"],73:["❄️","雪"],75:["❄️","強い雪"],77:["🌨️","霧雪"],80:["🌦️","にわか雨"],81:["🌧️","にわか雨"],82:["☔","激しいにわか雨"],85:["🌨️","にわか雪"],86:["❄️","強いにわか雪"],95:["⛈️","雷雨"],96:["⛈️","雷雨(雹)"],99:["⛈️","激しい雷雨(雹)"]};
+
+// 都道府県（検索入力からの絞り込みヒント判定用）
+const PREFS = ["北海道","青森","岩手","宮城","秋田","山形","福島","茨城","栃木","群馬","埼玉","千葉","東京","神奈川","新潟","富山","石川","福井","山梨","長野","岐阜","静岡","愛知","三重","滋賀","京都","大阪","兵庫","奈良","和歌山","鳥取","島根","岡山","広島","山口","徳島","香川","愛媛","高知","福岡","佐賀","長崎","熊本","大分","宮崎","鹿児島","沖縄"];
 
 let DATA = null;       // 取得した整形済みデータ
 let FOCUS = null;      // 表示中の日付 YYYY-MM-DD
@@ -408,20 +423,66 @@ function initPresets(){
 
 // ---- geocoding ----
 async function geocode(){
-  const q=$("#qname").value.trim();
-  if(!q){ setStatus("山名を入れてね",false); return; }
-  setStatus("検索中…",false);
+  const raw=$("#qname").value.trim();
+  if(!raw){ setStatus("山名を入れてね",false); clearCand(); return; }
+  // 入力をパース：県ヒント・標高ヒント・山名（APIには山名だけ送る）
+  const prefHint = PREFS.find(p=>raw.includes(p)) || null;
+  const elevMatch = raw.match(/(\d{3,4})\s*m?/);
+  const elevHint = elevMatch ? parseInt(elevMatch[1],10) : null;
+  let nameQ = raw;
+  if(prefHint) nameQ = nameQ.replace(new RegExp(prefHint+"[県府]?","g"),"");
+  if(elevMatch) nameQ = nameQ.replace(elevMatch[0],"");
+  nameQ = nameQ.replace(/[\s,、　]+/g,"").trim();
+  if(!nameQ){ setStatus("山名も入れてね（例：笠ヶ岳 長野／笠ヶ岳 2898）",true); clearCand(); return; }
+
+  setStatus("検索中…",false); clearCand();
   try{
-    const u=`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=ja&format=json`;
+    const u=`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(nameQ)}&count=10&language=ja&format=json`;
     const r=await fetch(u);
     const j=await r.json();
-    if(!j.results || !j.results.length){ setStatus(`「${q}」が見つからなかった。緯度経度を手で入れてみて。`,true); return; }
-    const g=j.results[0];
-    $("#lat").value=g.latitude; $("#lng").value=g.longitude;
-    if(g.elevation!=null) $("#elev").value=Math.round(g.elevation);
-    $("#preset").value=0;
-    setStatus(`📍 ${g.name}${g.admin1?(" / "+g.admin1):""} を入力。標高は山頂とズレてたら手で直して取得してね。`,false);
+    let results=(j.results||[]);
+    if(!results.length){ setStatus(`「${nameQ}」が見つからなかった。緯度経度を手で入れてみて。`,true); return; }
+    // 県・標高ヒントでスコア付け→並べ替え（ヒント無しなら元の順のまま）
+    results = results.map(g=>{
+      let score=0;
+      if(prefHint && g.admin1 && g.admin1.includes(prefHint)) score+=100;
+      if(elevHint!=null && g.elevation!=null) score+=Math.max(0, 60-Math.abs(g.elevation-elevHint)/15);
+      return {g,score};
+    }).sort((a,b)=>b.score-a.score).map(x=>x.g);
+
+    if(results.length===1){ pickCand(results[0]); return; }
+    renderCand(results, prefHint, elevHint);
   }catch(e){ setStatus(`検索に失敗。緯度経度を手入力すれば取得できるよ。<br><span style="opacity:.6">${e.message}</span>`,true); }
+}
+
+// 候補の絞り込み・選択
+function clearCand(){ $("#cand").innerHTML=""; }
+
+function candPlace(g){
+  return [g.admin1, (g.country && g.country!=="日本") ? g.country : null].filter(Boolean).join(" · ");
+}
+
+function renderCand(list, prefHint, elevHint){
+  const w=$("#cand");
+  const hintBits=[prefHint, elevHint!=null ? elevHint+"m" : null].filter(Boolean).join(" / ");
+  const hint = hintBits ? `（${hintBits} に近いものを上に並べたよ）` : "";
+  let html=`<p class="cand-hint">${list.length}件ヒット、どれ？${hint}</p>`;
+  list.forEach((g,i)=>{
+    const place=candPlace(g) || "—";
+    const el=g.elevation!=null ? Math.round(g.elevation)+"m" : "標高—";
+    html+=`<button class="cand-btn" data-i="${i}"><span class="cn">${g.name}</span><span class="cm">${place} · ${el}</span></button>`;
+  });
+  w.innerHTML=html;
+  [...w.querySelectorAll(".cand-btn")].forEach(b=>{ b.onclick=()=>pickCand(list[+b.dataset.i]); });
+}
+
+function pickCand(g){
+  $("#lat").value=g.latitude; $("#lng").value=g.longitude;
+  if(g.elevation!=null) $("#elev").value=Math.round(g.elevation);
+  $("#preset").value=0;
+  clearCand();
+  const place=candPlace(g), el=g.elevation!=null ? Math.round(g.elevation)+"m" : "標高—";
+  setStatus(`📍 ${g.name}${place?(" / "+place):""}（${el}）をセット。標高が山頂とズレてたら手で直してね。`,false);
 }
 
 // ---- fetch forecast ----
@@ -576,7 +637,7 @@ function renderCape(){
 
 function renderTable(){
   const bands=[["早朝","〜7時",0,7],["午前","7〜11時",7,11],["午後","11〜15時",11,15],["夕方","15〜19時",15,19],["夜","19時〜",19,24]];
-  let html=`<thead><tr><th>時間帯</th><th>風・突風 m/s</th><th>気温・体感 ℃</th><th>雲 低/中/高 %</th><th>降水 mm</th><th>CAPE</th><th>天気</th></tr></thead><tbody>`;
+  let html=`<thead><tr><th>時間帯</th><th>天気</th><th>降水 mm</th><th>風・突風 m/s</th><th>気温・体感 ℃</th><th>雲 低/中/高 %</th><th>CAPE</th></tr></thead><tbody>`;
   bands.forEach(([nm,rng,h0,h1])=>{
     const idx=bandIdx(FOCUS,h0,h1);
     if(!idx.length) return;
@@ -609,12 +670,12 @@ function renderTable(){
     const feel=amn==null?"":` <span style="color:var(--mist-dim);font-size:12px">体感${Math.round(amn)}</span>`;
     html+=`<tr>
       <td class="band">${nm}<small>${rng}</small></td>
+      <td style="text-align:right;font-size:13px">${wcode(wc)}</td>
+      <td><span class="num">${pmax.toFixed(1)}</span></td>
       <td style="white-space:nowrap">${arrow}<span class="num" style="color:${wcol}">${wmn==null?"—":Math.round(wmn)+"–"+Math.round(wmx)}</span>${dname}${gust}</td>
       <td style="white-space:nowrap"><span class="num">${tmn==null?"—":Math.round(tmn)+"–"+Math.round(tmx)}</span>${feel}</td>
       <td style="white-space:nowrap"><span class="num" style="color:${lowCloudColor(cLow)}">${cLow==null?"—":cLow}</span><span style="color:var(--mist-dim);font-size:12px"> / ${cMid==null?"—":cMid} / ${cHigh==null?"—":cHigh}</span></td>
-      <td><span class="num">${pmax.toFixed(1)}</span></td>
       <td><span class="num" style="color:${capeRead(cmax)[2]}">${cmax==null?"—":Math.round(cmax)}</span></td>
-      <td style="text-align:right;font-size:13px">${wcode(wc)}</td>
     </tr>`;
   });
   $("#tbl").innerHTML=html+"</tbody>";
