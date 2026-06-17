@@ -305,6 +305,7 @@ const PRESETS = [
   {label:"— 山を選ぶ —", lat:"", lng:"", elev:""},
   {label:"槍ヶ岳 (3,180m)",        lat:36.3417, lng:137.6475, elev:3180},
   {label:"奥穂高岳 (3,190m)",      lat:36.2894, lng:137.6479, elev:3190},
+  {label:"笠ヶ岳 (2,898m)",        lat:36.2997, lng:137.5833, elev:2898},
   {label:"立山・雄山 (3,003m)",    lat:36.5744, lng:137.6194, elev:3003},
   {label:"燕岳 (2,763m)",          lat:36.4061, lng:137.7106, elev:2763},
   {label:"常念岳 (2,857m)",        lat:36.3275, lng:137.7269, elev:2857},
@@ -451,6 +452,7 @@ async function geocode(){
     }).sort((a,b)=>b.score-a.score).map(x=>x.g);
 
     if(results.length===1){ pickCand(results[0]); return; }
+    setStatus("",false);
     renderCand(results, prefHint, elevHint);
   }catch(e){ setStatus(`検索に失敗。緯度経度を手入力すれば取得できるよ。<br><span style="opacity:.6">${e.message}</span>`,true); }
 }
