@@ -620,106 +620,107 @@ function renderTable(){
 
 function renderSummary(){
   const m=DATA.meta;
-  const dt=new Date(FOCUS+"T00:00");
-  const wd=["日","月","火","水","木","金","土"][dt.getDay()];
   const placeSel=PRESETS[$("#preset").value];
   const place=(placeSel&&placeSel.lat!=="")?placeSel.label.split(" (")[0]:($("#qname").value.trim()||"指定地点");
   const f=m.fetched, hh=String(f.getHours()).padStart(2,"0"),mm=String(f.getMinutes()).padStart(2,"0");
-  const sun=(DATA.daily&&DATA.daily[FOCUS])?DATA.daily[FOCUS]:null;
-  // 集計ヘルパー（全モデル横断）
+  // 集計ヘルパー（全モデル横断・idx配列を受け取る）
   const avg   =(vn,idx)=>{let s=0,n=0;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null){s+=v;n++;}}));return n?s/n:null;};
   const maxOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.max(x,v));}));return x;};
   const minOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.min(x,v));}));return x;};
   const sumMax=(vn,idx)=>{let t=0;idx.forEach(i=>{t+=Math.max(...valsAt(vn,i).map(v=>v||0));});return t;};
   const r=v=>v==null?"—":Math.round(v);
+  const WD=["日","月","火","水","木","金","土"];
 
-  // ===== ヘッダ =====
+  // ===== ヘッダ（1回）=====
   let s=`=== ソナ予報インプット｜${place}(${m.elev!=null?Math.round(m.elev).toLocaleString()+"m":"標高—"}) ===\n`;
-  s+=`${FOCUS}(${wd}) / grid ${m.lat.toFixed(3)},${m.lng.toFixed(3)} / 取得 ${f.getMonth()+1}/${f.getDate()} ${hh}:${mm}JST(全球6h更新)\n`;
-  if(sun) s+=`日の出 ${hhmm(sun.sunrise)} / 日の入 ${hhmm(sun.sunset)}\n`;
+  s+=`grid ${m.lat.toFixed(3)},${m.lng.toFixed(3)} / 取得 ${f.getMonth()+1}/${f.getDate()} ${hh}:${mm}JST(全球6h更新) / 全${DATA.dates.length}日分\n`;
   s+=`モデル順: ECMWF / GFS / GSM / MSM\n`;
+  s+=`\n■ 総観（気圧配置・前線・台風・複数日の流れ）\n  ※ここはソナがWeb確認で補完する欄\n`;
 
-  // ===== 総観メモ欄（ソナがWeb確認で補完）=====
-  s+=`\n■ 総観（気圧配置・前線・ヤマテン差分）\n  ※ここはソナがWeb確認で補完する欄\n`;
+  // ===== 各日ブロック（取得した全日分）=====
+  DATA.dates.forEach(date=>{
+    const dt=new Date(date+"T00:00");
+    const sun=(DATA.daily&&DATA.daily[date])?DATA.daily[date]:null;
+    s+=`\n━━━━━━━ ${date}(${WD[dt.getDay()]}) ━━━━━━━\n`;
+    if(sun) s+=`日の出 ${hhmm(sun.sunrise)} / 日の入 ${hhmm(sun.sunset)}\n`;
 
-  // ===== 時間帯サマリー =====
-  s+=`\n■ 時間帯サマリー（風向 風700 突風 / 気温(体感) / 雲 低中高 / 降水 / 天気）\n`;
-  [["早朝","〜7",0,7],["午前","7-11",7,11],["午後","11-15",11,15],["夕方","15-19",15,19],["夜","19-",19,24]].forEach(([nm,rg,h0,h1])=>{
-    const idx=bandIdx(FOCUS,h0,h1); if(!idx.length) return;
-    const wmn=minOf("wind_speed_700hPa",idx), wmx=maxOf("wind_speed_700hPa",idx);
-    let dirs=[]; idx.forEach(i=>valsAt("wind_direction_700hPa",i).forEach(v=>{if(v!=null)dirs.push(v);}));
-    const dir=avgDir(dirs);
-    const gmx=maxOf("wind_gusts_10m",idx);
-    const tmn=minOf("temperature_2m",idx), tmx=maxOf("temperature_2m",idx);
-    const amn=minOf("apparent_temperature",idx);
-    const cl=avg("cloud_cover_low",idx), cm=avg("cloud_cover_mid",idx), ch=avg("cloud_cover_high",idx);
-    const rain=sumMax("rain",idx), snow=sumMax("snowfall",idx), pp=sumMax("precipitation",idx);
-    const wc=maxOf("weather_code",idx);
-    const wstr=wmn==null?"—":r(wmn)+"-"+r(wmx);
-    const gstr=gmx==null?"":` 突${r(gmx)}`;
-    const tstr=tmn==null?"—":r(tmn)+"-"+r(tmx);
-    const astr=amn==null?"":`(体感${r(amn)})`;
-    const dstr=dir==null?"":dirName(dir)+" ";
-    const ptype=precipType(rain,snow,wc);
-    const pstr=ptype==="なし"?"降水なし":`${ptype}${pp.toFixed(1)}mm`;
-    s+=`  ${nm}(${rg}時): ${dstr}${wstr}${gstr} / ${tstr}℃${astr} / 雲 ${r(cl)}/${r(cm)}/${r(ch)} / ${pstr} / ${wcode(wc)}\n`;
+    // 時間帯サマリー
+    s+=`■ 時間帯サマリー（風向 風700 突風 / 気温(体感) / 雲 低中高 / 降水 / 天気）\n`;
+    [["早朝","〜7",0,7],["午前","7-11",7,11],["午後","11-15",11,15],["夕方","15-19",15,19],["夜","19-",19,24]].forEach(([nm,rg,h0,h1])=>{
+      const idx=bandIdx(date,h0,h1); if(!idx.length) return;
+      const wmn=minOf("wind_speed_700hPa",idx), wmx=maxOf("wind_speed_700hPa",idx);
+      let dirs=[]; idx.forEach(i=>valsAt("wind_direction_700hPa",i).forEach(v=>{if(v!=null)dirs.push(v);}));
+      const dir=avgDir(dirs);
+      const gmx=maxOf("wind_gusts_10m",idx);
+      const tmn=minOf("temperature_2m",idx), tmx=maxOf("temperature_2m",idx);
+      const amn=minOf("apparent_temperature",idx);
+      const cl=avg("cloud_cover_low",idx), cm=avg("cloud_cover_mid",idx), ch=avg("cloud_cover_high",idx);
+      const rain=sumMax("rain",idx), snow=sumMax("snowfall",idx), pp=sumMax("precipitation",idx);
+      const wc=maxOf("weather_code",idx);
+      const wstr=wmn==null?"—":r(wmn)+"-"+r(wmx);
+      const gstr=gmx==null?"":` 突${r(gmx)}`;
+      const tstr=tmn==null?"—":r(tmn)+"-"+r(tmx);
+      const astr=amn==null?"":`(体感${r(amn)})`;
+      const dstr=dir==null?"":dirName(dir)+" ";
+      const ptype=precipType(rain,snow,wc);
+      const pstr=ptype==="なし"?"降水なし":`${ptype}${pp.toFixed(1)}mm`;
+      s+=`  ${nm}(${rg}時): ${dstr}${wstr}${gstr} / ${tstr}℃${astr} / 雲 ${r(cl)}/${r(cm)}/${r(ch)} / ${pstr} / ${wcode(wc)}\n`;
+    });
+
+    // 3時間刻み
+    s+=`■ 3時間刻み（風700 突風 / 低層雲 / 降水mm）\n`;
+    [3,6,9,12,15,18,21].forEach(h=>{
+      const i=idxAt(date,h); if(i<0) return;
+      const w=valsAt("wind_speed_700hPa",i).filter(v=>v!=null);
+      const g=valsAt("wind_gusts_10m",i).filter(v=>v!=null);
+      const lo=valsAt("cloud_cover_low",i).filter(v=>v!=null);
+      const pr=valsAt("precipitation",i).map(v=>v||0);
+      const wAvg=w.length?Math.round(w.reduce((a,b)=>a+b,0)/w.length):null;
+      const gMax=g.length?Math.max(...g):null;
+      const loAvg=lo.length?Math.round(lo.reduce((a,b)=>a+b,0)/lo.length):null;
+      const pMax=pr.length?Math.max(...pr):0;
+      s+=`  ${String(h).padStart(2,"0")}時: 風${r(wAvg)}${gMax!=null?" 突"+r(gMax):""} / 低層雲${r(loAvg)} / 雨${pMax.toFixed(1)}\n`;
+    });
+
+    // 稜線の風 4モデル一致度
+    s+=`■ 稜線の風 4モデル一致度 m/s（≒3000m）\n`;
+    [3,6,9,12,15,18,21].forEach(h=>{
+      const i=idxAt(date,h); if(i<0) return;
+      const raw=valsAt("wind_speed_700hPa",i);
+      const vals=raw.filter(v=>v!=null);
+      if(!vals.length) return;
+      const rng=Math.max(...vals)-Math.min(...vals);
+      const [mark,desc]=agreement(rng);
+      const str=raw.map(v=>v==null?"—":Math.round(v)).join("/");
+      s+=`  ${String(h).padStart(2,"0")}時: ${str}  (幅${rng.toFixed(0)} ${mark}${desc})\n`;
+    });
+
+    // 雷CAPE
+    s+=`■ 雷CAPE J/kg（GFS/ECMWF・午後11-15時の最大）\n`;
+    const idxA=bandIdx(date,11,15);
+    CAPE_MODELS.forEach(mid=>{
+      const arr=DATA.byModel[mid].cape; let max=null;
+      if(arr) idxA.forEach(i=>{if(arr[i]!=null)max=(max==null?arr[i]:Math.max(max,arr[i]));});
+      s+=`  ${MODELS.find(x=>x.id===mid).name}: ${max==null?"—":Math.round(max)}（${capeRead(max)[0]}）\n`;
+    });
+
+    // 雲海インジケータ
+    const idxMorn=bandIdx(date,4,9);
+    if(idxMorn.length){
+      const lo=avg("cloud_cover_low",idxMorn), rh7=avg("relative_humidity_700hPa",idxMorn), rh8=avg("relative_humidity_850hPa",idxMorn);
+      const sea=seaOfClouds(lo,rh7,rh8);
+      if(sea) s+=`■ 雲海(早朝4-9時): ${sea.label} — ${sea.note}（低層雲${r(lo)}%/中腹850hPa${r(rh8)}%/山頂700hPa${r(rh7)}%）\n`;
+    }
+
+    // 気圧トレンド
+    const pt=pressureTrend(bandIdx(date,0,24));
+    if(pt) s+=`■ 気圧トレンド(当日): ${pt.arrow} ${pt.delta}hPa — ${pt.note}\n`;
+
+    // 0℃高度
+    const fl=DATA.byModel.gfs_seamless.freezing_level_height;
+    if(fl){ const i=idxAt(date,9); if(i>=0&&fl[i]!=null) s+=`■ 0℃高度(GFS 9時): 約${Math.round(fl[i])}m\n`; }
   });
 
-  // ===== 3時間刻み（急変チェック）=====
-  s+=`\n■ 3時間刻み（急変チェック: 風700 突風 / 低層雲 / 降水mm）\n`;
-  [3,6,9,12,15,18,21].forEach(h=>{
-    const i=idxAt(FOCUS,h); if(i<0) return;
-    const w=valsAt("wind_speed_700hPa",i).filter(v=>v!=null);
-    const g=valsAt("wind_gusts_10m",i).filter(v=>v!=null);
-    const lo=valsAt("cloud_cover_low",i).filter(v=>v!=null);
-    const pr=valsAt("precipitation",i).map(v=>v||0);
-    const wAvg=w.length?Math.round(w.reduce((a,b)=>a+b,0)/w.length):null;
-    const gMax=g.length?Math.max(...g):null;
-    const loAvg=lo.length?Math.round(lo.reduce((a,b)=>a+b,0)/lo.length):null;
-    const pMax=pr.length?Math.max(...pr):0;
-    s+=`  ${String(h).padStart(2,"0")}時: 風${r(wAvg)}${gMax!=null?" 突"+r(gMax):""} / 低層雲${r(loAvg)} / 雨${pMax.toFixed(1)}\n`;
-  });
-
-  // ===== 稜線の風 4モデル一致度（既存）=====
-  s+=`\n■ 稜線の風 4モデル一致度 m/s（≒3000m）\n`;
-  [3,6,9,12,15,18,21].forEach(h=>{
-    const i=idxAt(FOCUS,h); if(i<0) return;
-    const raw=valsAt("wind_speed_700hPa",i);
-    const vals=raw.filter(v=>v!=null);
-    if(!vals.length) return;
-    const rng=Math.max(...vals)-Math.min(...vals);
-    const [mark,desc]=agreement(rng);
-    const str=raw.map(v=>v==null?"—":Math.round(v)).join("/");
-    s+=`  ${String(h).padStart(2,"0")}時: ${str}  (幅${rng.toFixed(0)} ${mark}${desc})\n`;
-  });
-
-  // ===== 雷CAPE（既存）=====
-  s+=`\n■ 雷CAPE J/kg（GFS/ECMWF・午後11-15時の最大）\n`;
-  const idxA=bandIdx(FOCUS,11,15);
-  CAPE_MODELS.forEach(mid=>{
-    const arr=DATA.byModel[mid].cape; let max=null;
-    if(arr) idxA.forEach(i=>{if(arr[i]!=null)max=(max==null?arr[i]:Math.max(max,arr[i]));});
-    s+=`  ${MODELS.find(x=>x.id===mid).name}: ${max==null?"—":Math.round(max)}（${capeRead(max)[0]}）\n`;
-  });
-
-  // ===== 雲海インジケータ（新）=====
-  const idxMorn=bandIdx(FOCUS,4,9); // 早朝が雲海のゴールデンタイム
-  if(idxMorn.length){
-    const lo=avg("cloud_cover_low",idxMorn), rh7=avg("relative_humidity_700hPa",idxMorn), rh8=avg("relative_humidity_850hPa",idxMorn);
-    const sea=seaOfClouds(lo,rh7,rh8);
-    if(sea) s+=`\n■ 雲海インジケータ（早朝4-9時）\n  ${sea.label} — ${sea.note}\n  ※低層雲${r(lo)}% / 中腹(850hPa)湿度${r(rh8)}% / 山頂高度(700hPa)湿度${r(rh7)}%\n`;
-  }
-
-  // ===== 気圧トレンド（新）=====
-  const pt=pressureTrend(bandIdx(FOCUS,0,24));
-  if(pt) s+=`\n■ 気圧トレンド（当日 海面気圧の変化）\n  ${pt.arrow} ${pt.delta}hPa — ${pt.note}\n`;
-
-  // ===== 0℃高度（既存・GFSのみ）=====
-  const fl=DATA.byModel.gfs_seamless.freezing_level_height;
-  if(fl){
-    const i=idxAt(FOCUS,9);
-    if(i>=0&&fl[i]!=null) s+=`\n■ 0℃高度(GFS 9時): 約${Math.round(fl[i])}m\n`;
-  }
   $("#summary").textContent=s;
 }
 
