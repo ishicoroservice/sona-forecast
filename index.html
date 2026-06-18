@@ -268,9 +268,9 @@ footer a{color:var(--mist)}
     </div>
 
     <div class="panel">
-      <p class="panel-head">⛈ 雷の燃料 CAPE <span class="hint">GFS / ECMWF / ICON・選択日の午後最大</span></p>
+      <p class="panel-head">⛈ 雷：燃料 CAPE と蓋 CIN <span class="hint">CAPE=3モデル午後最大／CIN=GFS午後最小</span></p>
       <div class="cape-grid" id="cape"></div>
-      <p class="cape-foot">CAPEは雷の燃料。高くても発雷には引き金（午後の日射で谷から湧く対流）が要る。<b style="color:var(--frost)">CAPE × 午後 × 晴天</b>が重なる時間が要警戒。</p>
+      <p class="cape-foot">CAPEは雷の燃料、CINは発雷を抑える蓋（小さいほど薄い）。<b style="color:var(--frost)">CAPE大 × CIN小 × 午後の日射</b>が揃う時が雷の本番。蓋が厚い日はCAPEが高くても持ちやすい。</p>
     </div>
 
     <div class="panel">
@@ -301,7 +301,7 @@ footer a{color:var(--mist)}
 <script>
 "use strict";
 
-const VARS = "temperature_2m,apparent_temperature,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_gusts_10m,wind_speed_925hPa,wind_direction_925hPa,wind_speed_850hPa,wind_direction_850hPa,wind_speed_800hPa,wind_direction_800hPa,wind_speed_700hPa,wind_direction_700hPa,relative_humidity_925hPa,relative_humidity_800hPa,relative_humidity_700hPa,relative_humidity_850hPa,pressure_msl,cape,weather_code,precipitation,rain,snowfall,freezing_level_height";
+const VARS = "temperature_2m,apparent_temperature,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_gusts_10m,wind_speed_925hPa,wind_direction_925hPa,wind_speed_850hPa,wind_direction_850hPa,wind_speed_800hPa,wind_direction_800hPa,wind_speed_700hPa,wind_direction_700hPa,relative_humidity_925hPa,relative_humidity_800hPa,relative_humidity_700hPa,relative_humidity_850hPa,pressure_msl,cape,weather_code,precipitation,rain,snowfall,freezing_level_height,convective_inhibition";
 const MODELS = [
   {id:"ecmwf_ifs025", short:"E",  name:"ECMWF"},
   {id:"gfs_seamless", short:"G",  name:"GFS"},
@@ -409,18 +409,35 @@ function precipType(rain, snow, wc){
   if(th) return hail?"雷雨(雹)":"雷雨";
   return "なし";
 }
+// 天気コードの集約：雷(95+)は異なる2モデル以上が出したときだけ採用。1モデル単独の雷は雨系に落とす(狼少年防止)
+function worstWeatherCode(idxList){
+  const all=[]; const thunderModels=new Set();
+  idxList.forEach(i=>MODELS.forEach(m=>{
+    const a=DATA.byModel[m.id].weather_code; const v=a?a[i]:null;
+    if(v!=null){ all.push(v); if(v>=95) thunderModels.add(m.id); }
+  }));
+  if(!all.length) return null;
+  if(thunderModels.size>=2) return Math.max(...all);   // 2モデル以上が雷→採用
+  const nonT=all.filter(c=>c<95);                       // 雷1モデル以下→雷を除いた最悪
+  return nonT.length ? Math.max(...nonT) : Math.max(...all);
+}
 // 雲海/ガス判定: 低層雲・rh700(山頂高度)・rh850(中腹)。山頂が乾けば雲海、湿ればガス
 // 雲海判定用：山頂面→直下(中腹/盆地)面。雲海の雲頂は800-1500m付近なので山頂の1〜2層下を見る
 function midLevelFor(top){ return {"925":"925","850":"925","800":"850","700":"850"}[top]||"850"; }
 // 雲海/ガス判定: 低層雲・山頂面湿度(rhTop)・中腹面湿度(rhMid)。山頂が乾けば雲海、湿ればガス
 function seaOfClouds(low, rhTop, rhMid, topAlt, midAlt){
   if(low==null) return null;
-  if(low<40) return {label:"低い", note:"低層雲が少なく展望良好", col:"var(--calm)"};
-  if(rhTop!=null && rhTop<70 && (rhMid==null || rhMid>=65))
-    return {label:"雲海の可能性◎", note:`中腹(${midAlt})湿り・山頂高度(${topAlt})は乾き(湿度${Math.round(rhTop)}%)`, col:"var(--sky)"};
+  // ① 山頂が湿る(rh80%+)→低層雲が少なくてもガス（梅雨型の取りこぼし防止。低層雲だけで展望良好と即断しない）
   if(rhTop!=null && rhTop>=80)
-    return {label:"ガス(視界不良)", note:`山頂高度(${topAlt})も湿る(湿度${Math.round(rhTop)}%)`, col:"var(--alert)"};
-  return {label:"雲海/ガス微妙", note:"低層雲多め・山頂湿度は中間", col:"var(--warn)"};
+    return {label:"ガス(視界不良)", note:`山頂高度(${topAlt})が湿る(湿度${Math.round(rhTop)}%)`, col:"var(--alert)"};
+  // ② 中腹湿り×山頂乾き→雲海
+  if(rhTop!=null && rhTop<70 && rhMid!=null && rhMid>=65)
+    return {label:"雲海の可能性◎", note:`中腹(${midAlt})湿り・山頂高度(${topAlt})は乾き(湿度${Math.round(rhTop)}%)`, col:"var(--sky)"};
+  // ③ 低層雲少なく山頂も乾き→展望良好
+  if(low<40 && (rhTop==null || rhTop<70))
+    return {label:"低い", note:"低層雲少なく山頂も乾き・展望良好", col:"var(--calm)"};
+  // ④ それ以外（山頂rh70-80の中間・低層雲多めなど）
+  return {label:"雲海/ガス微妙", note:`低層雲${Math.round(low)}%・山頂湿度は中間`, col:"var(--warn)"};
 }
 // 気圧トレンド: その日の pressure_msl(全モデル平均) の変化量(hPa)
 function pressureTrend(idxList){
@@ -462,6 +479,15 @@ function capeRead(v){
   if(v<1000) return ["中程度","引き金あれば雷雨","var(--warn)"];
   if(v<2500) return ["強い不安定","午後の雷雨に警戒","var(--strong)"];
   return ["非常に不安定","激しい雷雨の素","var(--alert)"];
+}
+// CIN(対流抑制=蓋)。Open-Meteoは符号がモデル次第なので絶対値=蓋の強さで読む。小さいほど蓋が薄い=発雷しやすい
+function cinRead(v){
+  if(v==null) return ["—","データなし","var(--mist)"];
+  const a=Math.abs(v);
+  if(a<25)  return ["蓋なし","発雷を妨げない","var(--alert)"];
+  if(a<50)  return ["蓋うすい","弱い引き金で発雷","var(--strong)"];
+  if(a<200) return ["蓋あり","強い上昇流が要る","var(--warn)"];
+  return ["蓋つよい","発雷を抑える","var(--calm)"];
 }
 function fmtElev(m){ return Number(m).toLocaleString("ja-JP") + "m"; }
 
@@ -748,6 +774,18 @@ function renderCape(){
         <div class="cd">${desc}</div>
       </div>`;
   });
+  // 4枚目：CIN(対流の蓋・GFS午後最小=最も蓋が薄い=最も発雷しやすい時)
+  const cinArr=DATA.byModel.gfs_seamless.convective_inhibition;
+  let cinMin=null;
+  if(cinArr) idx.forEach(i=>{ if(cinArr[i]!=null){ const a=Math.abs(cinArr[i]); cinMin=(cinMin==null?a:Math.min(cinMin,a)); } });
+  const [clab,cdesc,ccol]=cinRead(cinMin);
+  w.innerHTML+=`
+      <div class="cape-card">
+        <div class="cm">CIN 蓋 · GFS午後最小</div>
+        <div class="cv" style="color:${ccol}">${cinMin==null?"—":Math.round(cinMin)}<span style="font-size:12px;color:var(--mist)"> J/kg</span></div>
+        <div class="cl" style="color:${ccol}">${clab}</div>
+        <div class="cd">${cdesc}</div>
+      </div>`;
 }
 
 function renderTable(){
@@ -787,7 +825,7 @@ function renderTable(){
     // CAPE: GFS/ECMWF/ICON max
     let cmax=null; idx.forEach(i=>CAPE_MODELS.forEach(mid=>{const a=DATA.byModel[mid].cape;if(a&&a[i]!=null)cmax=(cmax==null?a[i]:Math.max(cmax,a[i]));}));
     // 天気: 最悪コード
-    let wc=null; idx.forEach(i=>valsAt("weather_code",i).forEach(v=>{if(v!=null)wc=(wc==null?v:Math.max(wc,v));}));
+    let wc=worstWeatherCode(idx);
     const wcol=windColor(wmx);
     const arrow=dir==null?"":`<span style="color:${wcol};font-size:${windArrowSize(wmx)}px;line-height:1">${dirArrow(dir)}</span> `;
     const dname=dir==null?"":` <span style="color:var(--mist);font-size:12px">${dirName(dir)}</span>`;
@@ -869,7 +907,7 @@ function renderSummary(){
       const amn=minOf("apparent_temperature",idx);
       const cl=avg("cloud_cover_low",idx), cm=avg("cloud_cover_mid",idx), ch=avg("cloud_cover_high",idx);
       const rain=sumMax("rain",idx), snow=sumMax("snowfall",idx), pp=sumMax("precipitation",idx);
-      const wc=maxOf("weather_code",idx);
+      const wc=worstWeatherCode(idx);
       const wstr=wmn==null?"—":r(wmn)+"-"+r(wmx);
       const gstr=gmx==null?"":` 突${r(gmx)}`;
       const tstr=tmn==null?"—":r(tmn)+"-"+r(tmx);
@@ -914,6 +952,12 @@ function renderSummary(){
       if(arr) idxA.forEach(i=>{if(arr[i]!=null)max=(max==null?arr[i]:Math.max(max,arr[i]));});
       s+=`  ${MODELS.find(x=>x.id===mid).name}: ${max==null?"—":Math.round(max)}（${capeRead(max)[0]}）\n`;
     });
+    // CIN(対流の蓋・GFS午後最小=蓋が最も薄い時)
+    const cinArrS=DATA.byModel.gfs_seamless.convective_inhibition;
+    if(cinArrS){
+      let cinMin=null; idxA.forEach(i=>{if(cinArrS[i]!=null){const a=Math.abs(cinArrS[i]);cinMin=(cinMin==null?a:Math.min(cinMin,a));}});
+      if(cinMin!=null) s+=`■ CIN 対流の蓋 J/kg（GFS・午後最小＝蓋が最も薄い時）: ${Math.round(cinMin)}（${cinRead(cinMin)[0]}）※小さいほど発雷しやすい。CAPE大×CIN小×午後の日射で雷本番\n`;
+    }
 
     // 雲海インジケータ（山頂面=主役面、中腹=その直下面。標高に追従）
     const idxMorn=bandIdx(date,4,9);
