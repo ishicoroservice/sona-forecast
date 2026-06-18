@@ -354,6 +354,8 @@ const PRESETS = [
   {label:"火打山 (2,462m)",  lat:36.9197, lng:138.0775, elev:2462, rank:1},
   {label:"妙高山 (2,454m)",  lat:36.8919, lng:138.1133, elev:2454, rank:1},
   {label:"赤岳（八ヶ岳） (2,899m)",  lat:35.9706, lng:138.3700, elev:2899, rank:1},
+  // 北信（地元の名山）
+  {label:"飯縄山 (1,917m)",        lat:36.73944, lng:138.13361, elev:1917, rank:2},
   // 北信の里山
   {label:"雁田山 (759m)",          lat:36.694, lng:138.328, elev:759, rank:4},
   {label:"坂田山 (871m)",          lat:36.650, lng:138.322, elev:871, rank:4},
@@ -419,17 +421,56 @@ function precipType(rain, snow, wc){
   if(th) return hail?"雷雨(雹)":"雷雨";
   return "なし";
 }
-// 天気コードの集約：雷(95+)は異なる2モデル以上が出したときだけ採用。1モデル単独の雷は雨系に落とす(狼少年防止)
+// weather_code → 登山者目線の深刻度ランク(0-6)。生コードは順序尺度でない(雪71>雨61など種類差が数値差になる)ため、
+// ランクに変換してから統計処理する。0晴 1曇 2霧 3霧雨 4弱い降水 5しっかり降水 6雷雨。雨/雪の種別はランクに含めず降水量で別判定。
+function codeToRank(c){
+  if(c==null) return null;
+  if(c>=95) return 6;                                   // 95,96,99 雷雨
+  if(c<=1)  return 0;                                   // 0,1 快晴・晴れ
+  if(c<=3)  return 1;                                   // 2,3 薄曇り・曇り
+  if(c===45||c===48) return 2;                          // 霧・着氷霧
+  if(c>=51&&c<=57)   return 3;                          // 霧雨系(51,53,55,56,57)
+  if(c===61||c===80||c===71||c===85||c===77) return 4;  // 弱い雨/にわか雨/弱い雪/にわか雪/霧雪
+  return 5;                                             // 63,65,66,67,81,82,73,75,86 しっかり降水
+}
+// ランク → 表示用の代表weather_code。雨/雪はその時間帯の降水種別(isSnow)で出し分ける
+function rankToCode(rank, isSnow){
+  switch(rank){
+    case 0: return 0;            // ☀️快晴
+    case 1: return 3;            // ☁️曇り
+    case 2: return 45;           // 🌫️霧
+    case 3: return 53;           // 🌦️霧雨
+    case 4: return isSnow?71:61; // 🌨️弱い雪 / 🌦️弱い雨
+    case 5: return isSnow?73:63; // ❄️雪 / 🌧️雨
+    case 6: return 95;           // ⛈️雷雨
+    default:return 3;
+  }
+}
+// 天気コードの集約(2026/6 改修)：最悪値採用の下振れバイアスを排し、深刻度ランクの「中央値」を主体にする。
+// 補正の優先順位は 雷 ＞ しきい値 ＞ 中央値：
+//  (a)雷=コード95+を2モデル以上が出したら最優先でランク6に上書き(中央値に埋もれさせない安全網)
+//  (b)しきい値=雷でなく中央値ランク≧3でも実降水<0.3mmなら曇りに丸め(梅雨の霧雨ノイズ除去・案1)
+// 雨/雪はweather_codeでなく実降水量で判定し、雪コードと雨コードの取り違え事故を防ぐ。
 function worstWeatherCode(idxList){
-  const all=[]; const thunderModels=new Set();
-  idxList.forEach(i=>MODELS.forEach(m=>{
-    const a=DATA.byModel[m.id].weather_code; const v=a?a[i]:null;
-    if(v!=null){ all.push(v); if(v>=95) thunderModels.add(m.id); }
-  }));
-  if(!all.length) return null;
-  if(thunderModels.size>=2) return Math.max(...all);   // 2モデル以上が雷→採用
-  const nonT=all.filter(c=>c<95);                       // 雷1モデル以下→雷を除いた最悪
-  return nonT.length ? Math.max(...nonT) : Math.max(...all);
+  const ranks=[]; const thunderModels=new Set();
+  let precipSum=0, rainSum=0, snowSum=0;
+  idxList.forEach(i=>{
+    MODELS.forEach(m=>{                                  // ランクは(時刻×モデル)を全部プール
+      const a=DATA.byModel[m.id].weather_code; const v=a?a[i]:null;
+      if(v!=null){ ranks.push(codeToRank(v)); if(v>=95) thunderModels.add(m.id); }
+    });
+    precipSum += Math.max(...valsAt("precipitation",i).map(v=>v||0)); // 時間帯の降水合計(表示と整合)
+    rainSum   += Math.max(...valsAt("rain",i).map(v=>v||0));
+    snowSum   += Math.max(...valsAt("snowfall",i).map(v=>v||0));
+  });
+  if(!ranks.length) return null;
+  // ランク中央値（偶数個は安全側に切り上げ＝迷ったら悪いほうへ）
+  const s=ranks.sort((a,b)=>a-b), mid=Math.floor(s.length/2);
+  let rank = s.length%2 ? s[mid] : Math.ceil((s[mid-1]+s[mid])/2);
+  if(thunderModels.size>=2){ rank=6; }                  // (a)雷を最優先で立てる
+  else if(rank>=3 && precipSum<0.3){ rank=1; }          // (b)霧雨ノイズを曇りに丸め
+  const isSnow = snowSum>0.1 && snowSum>rainSum;         // 雪量(cm)が雨量(mm)を上回れば雪優勢
+  return rankToCode(rank, isSnow);
 }
 // 雲海/ガス判定: 低層雲・rh700(山頂高度)・rh850(中腹)。山頂が乾けば雲海、湿ればガス
 // 雲海判定用：山頂面→直下(中腹/盆地)面。雲海の雲頂は800-1500m付近なので山頂の1〜2層下を見る
