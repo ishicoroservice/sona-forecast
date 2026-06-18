@@ -268,7 +268,7 @@ footer a{color:var(--mist)}
     </div>
 
     <div class="panel">
-      <p class="panel-head">⛈ 雷：燃料 CAPE と蓋 CIN <span class="hint">CAPE=3モデル午後最大／CIN=GFS午後最小</span></p>
+      <p class="panel-head">⛈ 雷：燃料 CAPE と蓋 CIN <span class="hint">CAPE=3モデル午後最大／CIN=GFS日中中央値</span></p>
       <div class="cape-grid" id="cape"></div>
       <p class="cape-foot">CAPEは雷の燃料、CINは発雷を抑える蓋（小さいほど薄い）。<b style="color:var(--frost)">CAPE大 × CIN小 × 午後の日射</b>が揃う時が雷の本番。蓋が厚い日はCAPEが高くても持ちやすい。</p>
     </div>
@@ -339,21 +339,27 @@ function currentLevels(){
 const PRESETS = [
   {label:"— 山を選ぶ —", lat:"", lng:"", elev:""},
   // 後立山連峰（北→南）
-  {label:"白馬岳 (2,932m)",        lat:36.7586, lng:137.7589, elev:2932},
-  {label:"唐松岳 (2,696m)",        lat:36.6936, lng:137.7506, elev:2696},
-  {label:"鹿島槍ヶ岳 (2,889m)",    lat:36.6228, lng:137.7472, elev:2889},
+  {label:"白馬岳 (2,932m)",        lat:36.7586, lng:137.7589, elev:2932, rank:1},
+  {label:"唐松岳 (2,696m)",        lat:36.6936, lng:137.7506, elev:2696, rank:3},
+  {label:"鹿島槍ヶ岳 (2,889m)",    lat:36.6228, lng:137.7472, elev:2889, rank:1},
   // 立山連峰
-  {label:"立山・雄山 (3,003m)",    lat:36.5744, lng:137.6194, elev:3003},
+  {label:"立山・雄山 (3,003m)",    lat:36.5744, lng:137.6194, elev:3003, rank:1},
   // 北ア南部（表銀座→主稜線→笠）
-  {label:"燕岳 (2,763m)",          lat:36.4061, lng:137.7106, elev:2763},
-  {label:"常念岳 (2,857m)",        lat:36.3275, lng:137.7269, elev:2857},
-  {label:"槍ヶ岳 (3,180m)",        lat:36.3417, lng:137.6475, elev:3180},
-  {label:"奥穂高岳 (3,190m)",      lat:36.2894, lng:137.6479, elev:3190},
-  {label:"笠ヶ岳 (2,898m)",        lat:36.2997, lng:137.5833, elev:2898},
+  {label:"燕岳 (2,763m)",          lat:36.4061, lng:137.7106, elev:2763, rank:2},
+  {label:"常念岳 (2,857m)",        lat:36.3275, lng:137.7269, elev:2857, rank:1},
+  {label:"槍ヶ岳 (3,180m)",        lat:36.3417, lng:137.6475, elev:3180, rank:1},
+  {label:"奥穂高岳 (3,190m)",      lat:36.2894, lng:137.6479, elev:3190, rank:1},
+  {label:"笠ヶ岳 (2,898m)",        lat:36.2997, lng:137.5833, elev:2898, rank:1},
   // 頸城 → 八ヶ岳
-  {label:"火打山・頸城 (2,462m)",  lat:36.9197, lng:138.0775, elev:2462},
-  {label:"妙高山・頸城 (2,454m)",  lat:36.8919, lng:138.1133, elev:2454},
-  {label:"赤岳・八ヶ岳 (2,899m)",  lat:35.9706, lng:138.3700, elev:2899},
+  {label:"火打山・頸城 (2,462m)",  lat:36.9197, lng:138.0775, elev:2462, rank:1},
+  {label:"妙高山・頸城 (2,454m)",  lat:36.8919, lng:138.1133, elev:2454, rank:1},
+  {label:"赤岳・八ヶ岳 (2,899m)",  lat:35.9706, lng:138.3700, elev:2899, rank:1},
+  // 北信の里山
+  {label:"雁田山 (759m)",          lat:36.694, lng:138.328, elev:759, rank:4},
+  {label:"坂田山 (871m)",          lat:36.650, lng:138.322, elev:871, rank:4},
+  {label:"明覚山 (982m)",          lat:36.644, lng:138.342, elev:982, rank:4},
+  {label:"尼巌山 (781m)",          lat:36.553, lng:138.225, elev:781, rank:4},
+  {label:"奇妙山 (1,099m)",        lat:36.545, lng:138.233, elev:1099, rank:4},
 ];
 
 const WMO = {0:["☀️","快晴"],1:["🌤️","晴れ"],2:["⛅","薄曇り"],3:["☁️","曇り"],45:["🌫️","霧"],48:["🌫️","着氷霧"],51:["🌦️","霧雨"],53:["🌦️","霧雨"],55:["🌧️","強い霧雨"],56:["🌧️","着氷性霧雨"],57:["🌧️","着氷性霧雨"],61:["🌦️","弱い雨"],63:["🌧️","雨"],65:["☔","強い雨"],66:["🌧️","着氷性の雨"],67:["🌧️","着氷性の雨"],71:["🌨️","弱い雪"],73:["❄️","雪"],75:["❄️","強い雪"],77:["🌨️","霧雪"],80:["🌦️","にわか雨"],81:["🌧️","にわか雨"],82:["☔","激しいにわか雨"],85:["🌨️","にわか雪"],86:["❄️","強いにわか雪"],95:["⛈️","雷雨"],96:["⛈️","雷雨(雹)"],99:["⛈️","激しい雷雨(雹)"]};
@@ -372,6 +378,10 @@ function searchMeizan(q){const nq=normMt(q);if(!nq)return [];
 function meizanToG(m){return {name:m[0],latitude:m[1],longitude:m[2],elevation:(m[5]!=null?m[5]:null),admin1:null,country:"日本",_meizan:true,rank:m[3],aliases:m[4]||[]};}
 const RANKMETA={0:{label:"主要ピーク",cls:"r0"},1:{label:"百名山",cls:"r1"},2:{label:"二百名山",cls:"r2"},3:{label:"三百名山",cls:"r3"},4:{label:"里山",cls:"r4"}};
 function meizanRank(g){return RANKMETA[g.rank]||RANKMETA[3];}
+// ランク→候補リストと同じ色バッジ（単独ヒット・プリセットのステータス表示にも流用）
+function rankBadge(rank){ const rm=RANKMETA[rank]; return rm?` <span class="cn-badge ${rm.cls}">${rm.label}</span>`:""; }
+// 配列の中央値（CINの日中代表値などに使用。瞬間的な0に引っ張られない）
+function median(arr){ if(!arr||!arr.length) return null; const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2 ? s[m] : (s[m-1]+s[m])/2; }
 
 
 let DATA = null;       // 取得した整形済みデータ
@@ -500,7 +510,12 @@ function initPresets(){
   });
   sel.addEventListener("change",()=>{
     const p=PRESETS[sel.value];
-    if(p && p.lat!==""){ $("#lat").value=p.lat; $("#lng").value=p.lng; $("#elev").value=""; $("#qname").value=""; EXPECT_ELEV=p.elev; }
+    if(p && p.lat!==""){
+      $("#lat").value=p.lat; $("#lng").value=p.lng; $("#elev").value=""; $("#qname").value=""; EXPECT_ELEV=p.elev;
+      clearCand();
+      const nm=p.label.split(" (")[0];
+      setStatus(`📍 ${nm}${rankBadge(p.rank)} 登録標高${p.elev}mをセット。予報取得時にDEM標高と照合するよ。`,false);
+    }
   });
 }
 
@@ -585,8 +600,7 @@ function pickCand(g){
   if(g._meizan){
     $("#elev").value="";            // 空にしてDEM標高を取得→DB標高と照合
     EXPECT_ELEV=g.elevation;
-    const rm=meizanRank(g);
-    setStatus(`📍 ${g.name}（${rm.label}・登録標高${g.elevation!=null?Math.round(g.elevation)+"m":"—"}）をセット。予報取得時にDEM標高と照合するよ。`,false);
+    setStatus(`📍 ${g.name}${rankBadge(g.rank)} 登録標高${g.elevation!=null?Math.round(g.elevation)+"m":"—"}をセット。予報取得時にDEM標高と照合するよ。`,false);
   }else{
     if(g.elevation!=null) $("#elev").value=Math.round(g.elevation);
     else $("#elev").value="";
@@ -774,15 +788,17 @@ function renderCape(){
         <div class="cd">${desc}</div>
       </div>`;
   });
-  // 4枚目：CIN(対流の蓋・GFS午後最小=最も蓋が薄い=最も発雷しやすい時)
+  // 4枚目：CIN(対流の蓋・GFS日中9-15時の中央値=その日の蓋の地力。瞬間的な0に引っ張られない)
   const cinArr=DATA.byModel.gfs_seamless.convective_inhibition;
-  let cinMin=null;
-  if(cinArr) idx.forEach(i=>{ if(cinArr[i]!=null){ const a=Math.abs(cinArr[i]); cinMin=(cinMin==null?a:Math.min(cinMin,a)); } });
-  const [clab,cdesc,ccol]=cinRead(cinMin);
+  const cinIdx=bandIdx(FOCUS,9,15);
+  let cinVals=[];
+  if(cinArr) cinIdx.forEach(i=>{ if(cinArr[i]!=null) cinVals.push(Math.abs(cinArr[i])); });
+  const cinMid=median(cinVals);
+  const [clab,cdesc,ccol]=cinRead(cinMid);
   w.innerHTML+=`
       <div class="cape-card">
-        <div class="cm">CIN 蓋 · GFS午後最小</div>
-        <div class="cv" style="color:${ccol}">${cinMin==null?"—":Math.round(cinMin)}<span style="font-size:12px;color:var(--mist)"> J/kg</span></div>
+        <div class="cm">CIN 蓋 · GFS日中中央値</div>
+        <div class="cv" style="color:${ccol}">${cinMid==null?"—":Math.round(cinMid)}<span style="font-size:12px;color:var(--mist)"> J/kg</span></div>
         <div class="cl" style="color:${ccol}">${clab}</div>
         <div class="cd">${cdesc}</div>
       </div>`;
@@ -952,11 +968,13 @@ function renderSummary(){
       if(arr) idxA.forEach(i=>{if(arr[i]!=null)max=(max==null?arr[i]:Math.max(max,arr[i]));});
       s+=`  ${MODELS.find(x=>x.id===mid).name}: ${max==null?"—":Math.round(max)}（${capeRead(max)[0]}）\n`;
     });
-    // CIN(対流の蓋・GFS午後最小=蓋が最も薄い時)
+    // CIN(対流の蓋・GFS日中9-15時の中央値=蓋の地力)
     const cinArrS=DATA.byModel.gfs_seamless.convective_inhibition;
     if(cinArrS){
-      let cinMin=null; idxA.forEach(i=>{if(cinArrS[i]!=null){const a=Math.abs(cinArrS[i]);cinMin=(cinMin==null?a:Math.min(cinMin,a));}});
-      if(cinMin!=null) s+=`■ CIN 対流の蓋 J/kg（GFS・午後最小＝蓋が最も薄い時）: ${Math.round(cinMin)}（${cinRead(cinMin)[0]}）※小さいほど発雷しやすい。CAPE大×CIN小×午後の日射で雷本番\n`;
+      const cinIdxS=bandIdx(date,9,15);
+      let cinVs=[]; cinIdxS.forEach(i=>{if(cinArrS[i]!=null)cinVs.push(Math.abs(cinArrS[i]));});
+      const cinMid=median(cinVs);
+      if(cinMid!=null) s+=`■ CIN 対流の蓋 J/kg（GFS・日中9-15時の中央値＝蓋の地力）: ${Math.round(cinMid)}（${cinRead(cinMid)[0]}）※小さいほど発雷しやすい。CAPE大×CIN小×午後の日射で雷本番\n`;
     }
 
     // 雲海インジケータ（山頂面=主役面、中腹=その直下面。標高に追従）
