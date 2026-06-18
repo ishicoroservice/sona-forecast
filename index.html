@@ -460,9 +460,9 @@ function worstWeatherCode(idxList){
       const a=DATA.byModel[m.id].weather_code; const v=a?a[i]:null;
       if(v!=null){ ranks.push(codeToRank(v)); if(v>=95) thunderModels.add(m.id); }
     });
-    precipSum += Math.max(...valsAt("precipitation",i).map(v=>v||0)); // 時間帯の降水合計(表示と整合)
-    rainSum   += Math.max(...valsAt("rain",i).map(v=>v||0));
-    snowSum   += Math.max(...valsAt("snowfall",i).map(v=>v||0));
+    precipSum += (median(valsAt("precipitation",i).filter(v=>v!=null))||0); // 各時刻のモデル間中央値を合計(1モデルの微量maxで膨らまない・表示と整合)
+    rainSum   += (median(valsAt("rain",i).filter(v=>v!=null))||0);
+    snowSum   += (median(valsAt("snowfall",i).filter(v=>v!=null))||0);
   });
   if(!ranks.length) return null;
   // ランク中央値（偶数個は安全側に切り上げ＝迷ったら悪いほうへ）
@@ -875,11 +875,11 @@ function renderTable(){
     idx.forEach(i=>valsAt("temperature_2m",i).forEach(v=>{if(v!=null){tmn=(tmn==null?v:Math.min(tmn,v));tmx=(tmx==null?v:Math.max(tmx,v));}}));
     // 体感: 最も冷える値(min)
     let amn=null; idx.forEach(i=>valsAt("apparent_temperature",i).forEach(v=>{if(v!=null)amn=(amn==null?v:Math.min(amn,v));}));
-    // 雲: 低/中/高 を全モデル平均（眺望は低層雲が鍵）
-    const avgVar=(vn)=>{let s=0,n=0;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null){s+=v;n++;}}));return n?Math.round(s/n):null;};
-    const cLow=avgVar("cloud_cover_low"), cMid=avgVar("cloud_cover_mid"), cHigh=avgVar("cloud_cover_high");
-    // 降水: 全モデルmax合計（ざっくり worst）
-    let pmax=0; idx.forEach(i=>{const p=Math.max(...valsAt("precipitation",i).map(v=>v||0)); pmax+=p;});
+    // 雲: 低/中/高 をモデル間中央値（平均は0/100%の外れ値に弱い・眺望は低層雲が鍵）
+    const medVar=(vn)=>{const a=[];idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)a.push(v);}));return a.length?Math.round(median(a)):null;};
+    const cLow=medVar("cloud_cover_low"), cMid=medVar("cloud_cover_mid"), cHigh=medVar("cloud_cover_high");
+    // 降水: 各時刻のモデル間中央値を合計（1モデルの微量maxで膨らまない＝晴れなのに雨量、を防ぐ）
+    let pmax=0; idx.forEach(i=>{const mv=median(valsAt("precipitation",i).filter(v=>v!=null)); pmax+=(mv||0);});
     // CAPE: GFS/ECMWF/ICON max
     let cmax=null; idx.forEach(i=>CAPE_MODELS.forEach(mid=>{const a=DATA.byModel[mid].cape;if(a&&a[i]!=null)cmax=(cmax==null?a[i]:Math.max(cmax,a[i]));}));
     // 天気: 最悪コード
@@ -923,10 +923,10 @@ function renderSummary(){
   const place=(placeSel&&placeSel.lat!=="")?placeSel.label.split(" (")[0]:($("#qname").value.trim()||"指定地点");
   const f=m.fetched, hh=String(f.getHours()).padStart(2,"0"),mm=String(f.getMinutes()).padStart(2,"0");
   // 集計ヘルパー（全モデル横断・idx配列を受け取る）
-  const avg   =(vn,idx)=>{let s=0,n=0;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null){s+=v;n++;}}));return n?s/n:null;};
-  const maxOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.max(x,v));}));return x;};
-  const minOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.min(x,v));}));return x;};
-  const sumMax=(vn,idx)=>{let t=0;idx.forEach(i=>{t+=Math.max(...valsAt(vn,i).map(v=>v||0));});return t;};
+  const med   =(vn,idx)=>{const a=[];idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)a.push(v);}));return a.length?median(a):null;}; // 雲などの代表値（外れ値に強い中央値）
+  const maxOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.max(x,v));}));return x;}; // 突風など「最悪値」を見る項目用
+  const minOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.min(x,v));}));return x;}; // 体感など「最も厳しい値」用
+  const sumMed=(vn,idx)=>{let t=0;idx.forEach(i=>{const mv=median(valsAt(vn,i).filter(v=>v!=null));t+=(mv||0);});return t;}; // 降水：各時刻の中央値を合計
   const r=v=>v==null?"—":Math.round(v);
   const WD=["日","月","火","水","木","金","土"];
 
@@ -963,8 +963,8 @@ function renderSummary(){
       const gmx=maxOf("wind_gusts_10m",idx);
       const tmn=minOf("temperature_2m",idx), tmx=maxOf("temperature_2m",idx);
       const amn=minOf("apparent_temperature",idx);
-      const cl=avg("cloud_cover_low",idx), cm=avg("cloud_cover_mid",idx), ch=avg("cloud_cover_high",idx);
-      const rain=sumMax("rain",idx), snow=sumMax("snowfall",idx), pp=sumMax("precipitation",idx);
+      const cl=med("cloud_cover_low",idx), cm=med("cloud_cover_mid",idx), ch=med("cloud_cover_high",idx);
+      const rain=sumMed("rain",idx), snow=sumMed("snowfall",idx), pp=sumMed("precipitation",idx);
       const wc=worstWeatherCode(idx);
       const wstr=wmn==null?"—":r(wmn)+"-"+r(wmx);
       const gstr=gmx==null?"":` 突${r(gmx)}`;
@@ -983,12 +983,12 @@ function renderSummary(){
       const w=valsAt("wind_speed_"+L.main+"hPa",i).filter(v=>v!=null);
       const g=valsAt("wind_gusts_10m",i).filter(v=>v!=null);
       const lo=valsAt("cloud_cover_low",i).filter(v=>v!=null);
-      const pr=valsAt("precipitation",i).map(v=>v||0);
+      const pr=valsAt("precipitation",i).filter(v=>v!=null);
       const wAvg=w.length?Math.round(w.reduce((a,b)=>a+b,0)/w.length):null;
       const gMax=g.length?Math.max(...g):null;
-      const loAvg=lo.length?Math.round(lo.reduce((a,b)=>a+b,0)/lo.length):null;
-      const pMax=pr.length?Math.max(...pr):0;
-      s+=`  ${String(h).padStart(2,"0")}時: 風${r(wAvg)}${gMax!=null?" 突"+r(gMax):""} / 低層雲${r(loAvg)} / 雨${pMax.toFixed(1)}\n`;
+      const loMed=lo.length?Math.round(median(lo)):null;
+      const pMed=pr.length?(median(pr)||0):0;
+      s+=`  ${String(h).padStart(2,"0")}時: 風${r(wAvg)}${gMax!=null?" 突"+r(gMax):""} / 低層雲${r(loMed)} / 雨${pMed.toFixed(1)}\n`;
     });
 
     // 稜線の風 モデル一致度（主役面＋補助/挟み面）
