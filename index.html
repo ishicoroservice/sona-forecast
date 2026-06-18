@@ -311,6 +311,7 @@ const MODELS = [
 ];
 const CAPE_MODELS = ["gfs_seamless","ecmwf_ifs025","icon_seamless"]; // 雷(CAPE)を返すモデル
 const WIND_SCALE = 30; // m/s, バーの最大目盛
+const PRECIP_FLOOR = 0.3; // mm。時間帯の降水がこれ未満なら「降水なし／曇り」扱い（梅雨の霧雨ノイズ除去・天気記号と種別ラベルで共用）
 
 // 気圧面メタ：高度の目安とモデル可用数（5モデル体制 E/G/Gs/M/I）。800のみECMWF欠で4、他は5
 const PLEVELS = {
@@ -415,9 +416,9 @@ const hhmm = iso => { if(!iso) return "—"; const m=String(iso).match(/T(\d{2})
 // 降水の種類: 雨量(mm)・雪量(cm)・weather_code から
 function precipType(rain, snow, wc){
   const th = wc!=null && wc>=95, hail = wc===96||wc===99;
-  if(snow>0.1 && rain>0.1) return "霙";
+  if(snow>0.1 && rain>PRECIP_FLOOR) return "霙";
   if(snow>0.1) return th?"雷雪":"雪";
-  if(rain>0.1) return hail?"雨+雹":(th?"雷雨":"雨");
+  if(rain>PRECIP_FLOOR) return hail?"雨+雹":(th?"雷雨":"雨");
   if(th) return hail?"雷雨(雹)":"雷雨";
   return "なし";
 }
@@ -468,7 +469,7 @@ function worstWeatherCode(idxList){
   const s=ranks.sort((a,b)=>a-b), mid=Math.floor(s.length/2);
   let rank = s.length%2 ? s[mid] : Math.ceil((s[mid-1]+s[mid])/2);
   if(thunderModels.size>=2){ rank=6; }                  // (a)雷を最優先で立てる
-  else if(rank>=3 && precipSum<0.3){ rank=1; }          // (b)霧雨ノイズを曇りに丸め
+  else if(rank>=3 && precipSum<PRECIP_FLOOR){ rank=1; } // (b)霧雨ノイズを曇りに丸め
   const isSnow = snowSum>0.1 && snowSum>rainSum;         // 雪量(cm)が雨量(mm)を上回れば雪優勢
   return rankToCode(rank, isSnow);
 }
