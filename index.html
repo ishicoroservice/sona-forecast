@@ -924,6 +924,7 @@ function renderSummary(){
   const f=m.fetched, hh=String(f.getHours()).padStart(2,"0"),mm=String(f.getMinutes()).padStart(2,"0");
   // 集計ヘルパー（全モデル横断・idx配列を受け取る）
   const med   =(vn,idx)=>{const a=[];idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)a.push(v);}));return a.length?median(a):null;}; // 雲などの代表値（外れ値に強い中央値）
+  const avg   =(vn,idx)=>{let s=0,n=0;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null){s+=v;n++;}}));return n?s/n:null;}; // 雲海判定の低層雲・湿度（早朝の代表値）
   const maxOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.max(x,v));}));return x;}; // 突風など「最悪値」を見る項目用
   const minOf =(vn,idx)=>{let x=null;idx.forEach(i=>valsAt(vn,i).forEach(v=>{if(v!=null)x=(x==null?v:Math.min(x,v));}));return x;}; // 体感など「最も厳しい値」用
   const sumMed=(vn,idx)=>{let t=0;idx.forEach(i=>{const mv=median(valsAt(vn,i).filter(v=>v!=null));t+=(mv||0);});return t;}; // 降水：各時刻の中央値を合計
