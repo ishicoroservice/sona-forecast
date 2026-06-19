@@ -300,6 +300,7 @@ footer a{color:var(--mist)}
 
 <script>
 "use strict";
+const RH_GAS_FLOOR = 80; // %。山頂面の相対湿度がこれ以上で天気記号をガスへ引き上げ（地形性ガス対策）
 
 const VARS = "temperature_2m,apparent_temperature,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_gusts_10m,wind_speed_925hPa,wind_direction_925hPa,wind_speed_850hPa,wind_direction_850hPa,wind_speed_800hPa,wind_direction_800hPa,wind_speed_700hPa,wind_direction_700hPa,relative_humidity_1000hPa,relative_humidity_925hPa,relative_humidity_800hPa,relative_humidity_700hPa,relative_humidity_850hPa,pressure_msl,cape,weather_code,precipitation,rain,snowfall,freezing_level_height,convective_inhibition";
 const MODELS = [
@@ -311,7 +312,7 @@ const MODELS = [
 ];
 const CAPE_MODELS = ["gfs_seamless","ecmwf_ifs025","icon_seamless"]; // 雷(CAPE)を返すモデル
 const WIND_SCALE = 30; // m/s, バーの最大目盛
-const PRECIP_FLOOR = 0.3; // mm。時間帯の降水がこれ未満なら「降水なし／曇り」扱い（梅雨の霧雨ノイズ除去・天気記号と種別ラベルで共用）
+const PRECIP_RATE_FLOOR = 0.1; // mm/h。時間あたりの降水強度がこれ未満なら「降水なし／曇り」扱い（梅雨の霧雨ノイズ除去）。合計でなく強度で見るのでバンド長(時刻数)に左右されない。天気記号と種別ラベルで共用
 
 // 気圧面メタ：高度の目安とモデル可用数（5モデル体制 E/G/Gs/M/I）。800のみECMWF欠で4、他は5
 const PLEVELS = {
@@ -415,43 +416,50 @@ function windArrowSize(v){ if(v==null) return 14; if(v<10) return 15; if(v<20) r
 // 時刻 ISO→"4:38"
 const hhmm = iso => { if(!iso) return "—"; const m=String(iso).match(/T(\d{2}):(\d{2})/); return m?`${+m[1]}:${m[2]}`:"—"; };
 // 降水の種類: 雨量(mm)・雪量(cm)・weather_code から
-function precipType(rain, snow, wc){
+function precipType(rain, snow, wc, hours){
   const th = wc!=null && wc>=95, hail = wc===96||wc===99;
-  if(snow>0.1 && rain>PRECIP_FLOOR) return "霙";
+  const rRate = (hours&&hours>0) ? rain/hours : rain;   // 雨の強度 mm/h（バンド長に依存しない）
+  const rainWet = rRate>=PRECIP_RATE_FLOOR;             // ごく弱い霧雨は「降水なし」扱い＝天気記号の丸めと整合。雪は少量でも装備判断に効くので合計で残す
+  if(snow>0.1 && rainWet) return "霙";
   if(snow>0.1) return th?"雷雪":"雪";
-  if(rain>PRECIP_FLOOR) return hail?"雨+雹":(th?"雷雨":"雨");
+  if(rainWet) return hail?"雨+雹":(th?"雷雨":"雨");
   if(th) return hail?"雷雨(雹)":"雷雨";
   return "なし";
 }
-// weather_code → 登山者目線の深刻度ランク(0-6)。生コードは順序尺度でない(雪71>雨61など種類差が数値差になる)ため、
-// ランクに変換してから統計処理する。0晴 1曇 2霧 3霧雨 4弱い降水 5しっかり降水 6雷雨。雨/雪の種別はランクに含めず降水量で別判定。
+// weather_code → 登山者目線の深刻度ランク(0-8)。生コードは順序尺度でない(雪71>雨61など種類差が数値差になる)ため、
+// ランクに変換してから統計処理する。0快晴 1晴れ 2薄曇り 3曇り 4霧 5霧雨 6弱い降水 7しっかり降水 8雷雨。
+// 晴れ↔薄曇り↔曇りを分離（眺望判断の核心）。雨/雪の種別はランクに含めず降水量で別判定。
 function codeToRank(c){
   if(c==null) return null;
-  if(c>=95) return 6;                                   // 95,96,99 雷雨
-  if(c<=1)  return 0;                                   // 0,1 快晴・晴れ
-  if(c<=3)  return 1;                                   // 2,3 薄曇り・曇り
-  if(c===45||c===48) return 2;                          // 霧・着氷霧
-  if(c>=51&&c<=57)   return 3;                          // 霧雨系(51,53,55,56,57)
-  if(c===61||c===80||c===71||c===85||c===77) return 4;  // 弱い雨/にわか雨/弱い雪/にわか雪/霧雪
-  return 5;                                             // 63,65,66,67,81,82,73,75,86 しっかり降水
+  if(c>=95) return 8;                                   // 95,96,99 雷雨
+  if(c===0) return 0;                                   // 快晴
+  if(c===1) return 1;                                   // 晴れ
+  if(c===2) return 2;                                   // 薄曇り
+  if(c===3) return 3;                                   // 曇り
+  if(c===45||c===48) return 4;                          // 霧・着氷霧
+  if(c>=51&&c<=57)   return 5;                          // 霧雨系(51,53,55,56,57)
+  if(c===61||c===80||c===71||c===85||c===77) return 6;  // 弱い雨/にわか雨/弱い雪/にわか雪/霧雪
+  return 7;                                             // 63,65,66,67,81,82,73,75,86 しっかり降水
 }
 // ランク → 表示用の代表weather_code。雨/雪はその時間帯の降水種別(isSnow)で出し分ける
 function rankToCode(rank, isSnow){
   switch(rank){
     case 0: return 0;            // ☀️快晴
-    case 1: return 3;            // ☁️曇り
-    case 2: return 45;           // 🌫️霧
-    case 3: return 53;           // 🌦️霧雨
-    case 4: return isSnow?71:61; // 🌨️弱い雪 / 🌦️弱い雨
-    case 5: return isSnow?73:63; // ❄️雪 / 🌧️雨
-    case 6: return 95;           // ⛈️雷雨
+    case 1: return 1;            // 🌤️晴れ
+    case 2: return 2;            // ⛅薄曇り
+    case 3: return 3;            // ☁️曇り
+    case 4: return 45;           // 🌫️霧
+    case 5: return 53;           // 🌦️霧雨
+    case 6: return isSnow?71:61; // 🌨️弱い雪 / 🌦️弱い雨
+    case 7: return isSnow?73:63; // ❄️雪 / 🌧️雨
+    case 8: return 95;           // ⛈️雷雨
     default:return 3;
   }
 }
 // 天気コードの集約(2026/6 改修)：最悪値採用の下振れバイアスを排し、深刻度ランクの「中央値」を主体にする。
 // 補正の優先順位は 雷 ＞ しきい値 ＞ 中央値：
-//  (a)雷=コード95+を2モデル以上が出したら最優先でランク6に上書き(中央値に埋もれさせない安全網)
-//  (b)しきい値=雷でなく中央値ランク≧3でも実降水<0.3mmなら曇りに丸め(梅雨の霧雨ノイズ除去・案1)
+//  (a)雷=コード95+を2モデル以上が出したら最優先でランク8に上書き(中央値に埋もれさせない安全網)
+//  (b)しきい値=雷でなく中央値が霧雨以上(ランク≧5)でも実降水の強度<0.1mm/hなら曇りに丸め(梅雨の霧雨ノイズ除去)
 // 雨/雪はweather_codeでなく実降水量で判定し、雪コードと雨コードの取り違え事故を防ぐ。
 function worstWeatherCode(idxList){
   const ranks=[]; let thunderHour=false;                // 同一時刻に2モデル以上が雷を出した時刻が1つでもあれば発雷
@@ -468,11 +476,19 @@ function worstWeatherCode(idxList){
     snowSum   += (median(valsAt("snowfall",i).filter(v=>v!=null))||0);
   });
   if(!ranks.length) return null;
+  const precipRate = idxList.length ? precipSum/idxList.length : 0; // mm/h相当。バンドの時刻数で割って強度に正規化（早朝7時刻と午前4時刻で同じ意味になる）
   // ランク中央値（偶数個は安全側に切り上げ＝迷ったら悪いほうへ）
   const s=ranks.sort((a,b)=>a-b), mid=Math.floor(s.length/2);
   let rank = s.length%2 ? s[mid] : Math.ceil((s[mid-1]+s[mid])/2);
-  if(thunderHour){ rank=6; }                            // (a)雷を最優先で立てる（同時刻2モデル）
-  else if(rank>=3 && precipSum<PRECIP_FLOOR){ rank=1; } // (b)霧雨ノイズを曇りに丸め
+  if(thunderHour){ rank=8; }                              // (a)雷を最優先で立てる（同時刻2モデル）
+  else if(rank>=5 && precipRate<PRECIP_RATE_FLOOR){ rank=3; } // (b)弱い霧雨ノイズを曇りに丸め（合計でなく強度mm/hで判定）
+  // (c)湿度補正(常時ON・飯縄2026/6実証)：山頂面が飽和寸前なら低層雲%が低く晴れ判定でもガス側へ。地形性ガスは格子の低層雲%で取りこぼすため相対湿度で補う。集計方式と独立の別レイヤー
+  if(rank<4){
+    const Lh=currentLevels(), rhKey="relative_humidity_"+Lh.main+"hPa";
+    const rhV=[]; idxList.forEach(i=>{ const mv=median(valsAt(rhKey,i).filter(v=>v!=null)); if(mv!=null) rhV.push(mv); });
+    const rhTop=rhV.length?median(rhV):null;
+    if(rhTop!=null && rhTop>=RH_GAS_FLOOR) rank=4;
+  }
   const isSnow = snowSum>0.1 && snowSum>rainSum;         // 雪量(cm)が雨量(mm)を上回れば雪優勢
   return rankToCode(rank, isSnow);
 }
@@ -948,7 +964,7 @@ function renderSummary(){
   s+=`モデル順: ECMWF / GFS / GSM / MSM / ICON（5モデル）\n`;
   s+=`稜線の風の読み: ${lvlNote}\n`;
   s+=`集計の読み方: 風・気温=5モデルのレンジ(最小-最大＝予報の割れ幅) ／ 体感=最も冷える値(min) ／ 突風・CAPE=最大(安全側) ／ 雲・降水・3時間刻みの風=中央値 ／ 風向=循環平均\n`;
-  s+=`天気記号の注意: weather_codeは雲量+降水から算出（梅雨は湿度高で弱雨が出やすい）。行動判断は降水量mm＋低層雲%を優先。雷⛈️は同時刻に2モデル以上が発雷を示した時のみ表示（降水0mmでも雷だけ立つことあり＝CAPE/CINで別判断）\n`;
+  s+=`天気記号の注意: weather_codeは雲量+降水から算出（梅雨は湿度高で弱雨が出やすい）。記号は降水の強度(mm/h)で判定し、ごく弱い霧雨(0.1mm/h未満)は曇りに丸めるので合計降水mmが少量でも記号は曇りのことがある。快晴☀️/晴れ🌤️/薄曇り⛅/曇り☁️は区別。行動判断は降水量mm＋低層雲%を優先。雷⛈️は同時刻に2モデル以上が発雷を示した時のみ表示（降水0mmでも雷だけ立つことあり＝CAPE/CINで別判断）\n`;
   s+=`\n■ 総観（気圧配置・前線・台風・複数日の流れ）\n  ※ここはソナがWeb確認で補完する欄\n`;
 
   // ===== 各日ブロック（取得した全日分）=====
@@ -976,7 +992,7 @@ function renderSummary(){
       const tstr=tmn==null?"—":r(tmn)+"-"+r(tmx);
       const astr=amn==null?"":`(体感${r(amn)})`;
       const dstr=dir==null?"":dirName(dir)+" ";
-      const ptype=precipType(rain,snow,wc);
+      const ptype=precipType(rain,snow,wc,idx.length);
       const pstr=ptype==="なし"?"降水なし":`${ptype}${pp.toFixed(1)}mm`;
       s+=`  ${nm}(${rg}時): ${dstr}${wstr}${gstr} / ${tstr}℃${astr} / 雲 ${r(cl)}/${r(cm)}/${r(ch)} / ${pstr} / ${wcode(wc)}\n`;
     });
