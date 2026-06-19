@@ -530,8 +530,8 @@ function midLevelFor(top){ return {"925":"1000","850":"925","800":"850","700":"8
 // 雲海/ガス判定: 低層雲・山頂面湿度(rhTop)・中腹面湿度(rhMid)。山頂が乾けば雲海、湿ればガス
 function seaOfClouds(low, rhTop, rhMid, topAlt, midAlt){
   if(low==null) return null;
-  // ① 山頂が湿る(rh80%+)→低層雲が少なくてもガス（梅雨型の取りこぼし防止。低層雲だけで展望良好と即断しない）
-  if(rhTop!=null && rhTop>=80)
+  // ① 山頂が湿る(rh≥RH_GAS_FLOOR=80%)→低層雲が少なくてもガス（梅雨型の取りこぼし防止。低層雲だけで展望良好と即断しない）
+  if(rhTop!=null && rhTop>=RH_GAS_FLOOR)
     return {label:"ガス(視界不良)", note:`山頂高度(${topAlt})が湿る(湿度${Math.round(rhTop)}%)`, col:"var(--alert)"};
   // ② 中腹湿り×山頂乾き→雲海
   if(rhTop!=null && rhTop<70 && rhMid!=null && rhMid>=65)
