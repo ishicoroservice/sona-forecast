@@ -595,21 +595,22 @@ function cinRead(v){
 function fmtElev(m){ return Number(m).toLocaleString("ja-JP") + "m"; }
 
 // ---- init ----
+function applyPreset(){
+  const sel=$("#preset"); const p=PRESETS[sel.value];
+  if(p && p.lat!==""){
+    $("#lat").value=p.lat; $("#lng").value=p.lng; $("#elev").value=""; $("#qname").value=""; EXPECT_ELEV=p.elev;
+    clearCand();
+    const nm=p.label.split(" (")[0];
+    setStatus(`📍 ${nm}${rankBadge(p.rank)} 登録標高${p.elev}mをセット。予報取得時にDEM標高と照合するよ。`,false);
+  }
+}
 function initPresets(){
   const sel = $("#preset");
   PRESETS.forEach((p,i)=>{
     const o=document.createElement("option");
     o.value=i; o.textContent=p.label; sel.appendChild(o);
   });
-  sel.addEventListener("change",()=>{
-    const p=PRESETS[sel.value];
-    if(p && p.lat!==""){
-      $("#lat").value=p.lat; $("#lng").value=p.lng; $("#elev").value=""; $("#qname").value=""; EXPECT_ELEV=p.elev;
-      clearCand();
-      const nm=p.label.split(" (")[0];
-      setStatus(`📍 ${nm}${rankBadge(p.rank)} 登録標高${p.elev}mをセット。予報取得時にDEM標高と照合するよ。`,false);
-    }
-  });
+  sel.addEventListener("change", applyPreset);
 }
 
 // ---- geocoding ----
@@ -726,8 +727,7 @@ async function fetchForecast(){
     DATA.gsiElev=gsiElev;
     DATA.elevSrc = manualElev ? "手入力" : (gsiElev!=null ? "GSI 1m実測" : "Open-Meteo DEM");
     FOCUS=DATA.dates[0];
-    // 追加データ（fail-soft：エラーでもnullになるだけで本体予報は完走）
-    setStatus("アンサンブル・大気質を取得中…",false);
+    // 追加データ（fail-soft：エラーでもnullになるだけで本体予報は完走。ステータスは「5モデル取得中…」のまま）
     DATA.ens = await fetchEnsemble(lat,lng,days, isNaN(elev)?null:elev);
     DATA.aq  = await fetchAirQuality(lat,lng,days);
     renderAll();
@@ -1272,6 +1272,9 @@ function setStatus(html,isErr){ const s=$("#status"); s.innerHTML=html; s.classN
 
 // ---- wire ----
 initPresets();
+// 起動時に飯縄山をプリセット（練習用デフォルト・あとは取得ボタンを押すだけ）
+const _iizuna=PRESETS.findIndex(p=>p.label.includes("飯縄"));
+if(_iizuna>=0){ $("#preset").value=_iizuna; applyPreset(); }
 $("#go").onclick=fetchForecast;
 $("#geo").onclick=geocode;
 $("#copy").onclick=copySummary;
