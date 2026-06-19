@@ -173,6 +173,9 @@ button:active{transform:translateY(1px)}
 .cape-card .cl{font-size:13px;font-weight:600}
 .cape-card .cd{font-size:12px;color:var(--mist);margin-top:2px}
 .cape-foot{font-size:12px;color:var(--mist);margin-top:12px;line-height:1.5}
+.agg-row{display:flex;align-items:center;gap:10px;margin:2px 0 14px}
+.agg-row>span{font-size:12px;color:var(--mist);font-family:var(--mono);white-space:nowrap}
+.agg-row select{width:auto;min-width:130px;margin:0;font-size:14px;padding-top:8px;padding-bottom:8px}
 .lvl-tag{font-family:var(--mono);font-size:11px;color:var(--frost);margin:0 0 6px;letter-spacing:.04em}
 .lvl-tag.sub{color:var(--mist)}
 
@@ -239,12 +242,6 @@ footer a{color:var(--mist)}
           <option value="7">7日</option>
         </select>
       </label>
-      <label class="fld"><span>集計</span>
-        <select id="agg">
-          <option value="median">中央値</option>
-          <option value="max">MAX</option>
-        </select>
-      </label>
       <button class="btn-go" id="go">予報を取得</button>
     </div>
     <div id="cand" class="cand"></div>
@@ -281,6 +278,12 @@ footer a{color:var(--mist)}
 
     <div class="panel">
       <p class="panel-head">📊 時間帯別サマリー <span class="hint">選択日・全モデルの幅</span></p>
+      <label class="agg-row"><span>集計モード</span>
+        <select id="agg">
+          <option value="median">中央値</option>
+          <option value="max">MAX</option>
+        </select>
+      </label>
       <div class="tbl-scroll"><table id="tbl"></table></div>
       <p class="cape-foot">☁️ 雲の低/中/高は高さ帯（低〜3km・中3-8km・高8km〜）。眺望のカギは<b style="color:var(--frost)">低層雲</b>。</p>
       <p class="cape-foot">🧭 矢印＝風の向かう先（北風↓）・色と大きさ＝強さ。<b style="color:var(--frost)">方位名は逆</b>（＝吹いてくる向き）。</p>
@@ -396,6 +399,8 @@ function median(arr){ if(!arr||!arr.length) return null; const s=[...arr].sort((
 let AGG_MODE='median'; // 集計モード 'median'(通常)|'max'(悲観・型A保険＝割れた日に最悪を拾う)
 // 集計の切替ヘルパー。max版は同時刻の最大を返す＝最悪寄りに倒す。中央値版は外れ値に強い
 function agg(arr){ if(!arr||!arr.length) return null; return AGG_MODE==='max'?Math.max(...arr):median(arr); }
+// コピペ文面の併記用：集計モードを一時的に切り替えて関数を評価（テーブルのプルダウン状態に関係なく中央値/MAX両方を出す）
+function withMode(mode, fn){ const prev=AGG_MODE; AGG_MODE=mode; try{ return fn(); } finally{ AGG_MODE=prev; } }
 
 
 let DATA = null;       // 取得した整形済みデータ
@@ -973,9 +978,8 @@ function renderSummary(){
   s+=`grid ${m.lat.toFixed(3)},${m.lng.toFixed(3)} / 取得 ${f.getMonth()+1}/${f.getDate()} ${hh}:${mm}JST(全球6h更新) / 全${DATA.dates.length}日分\n`;
   s+=`モデル順: ECMWF / GFS / GSM / MSM / ICON（5モデル）\n`;
   s+=`稜線の風の読み: ${lvlNote}\n`;
-    const aggLabel=(AGG_MODE==='max')?'最大(悲観・割れた日に最悪を拾う)':'中央値(通常)';
-  s+=`集計モード: 【${aggLabel}】 ※天気記号/雲/降水/3時間刻みの風に効く（風気温レンジ・体感min・突風CAPE max・風向は不変）\n`;
-  s+=`集計の読み方: 風・気温=5モデルのレンジ(最小-最大＝予報の割れ幅) ／ 体感=最も冷える値(min) ／ 突風・CAPE=最大(安全側) ／ 雲・降水・3時間刻みの風=${aggLabel} ／ 風向=循環平均\n`;
+  s+=`集計表示: このテキストは中央値とMAXを常に併記（括弧 MAX=悲観・割れた日に最悪を拾う値）※画面の表はプルダウンで片方表示だが、ソナへの素材は両方渡す\n`;
+  s+=`集計の読み方: 風・気温=5モデルのレンジ(最小-最大＝予報の割れ幅) ／ 体感=最も冷える値(min) ／ 突風・CAPE=最大(安全側) ／ 雲・降水・3時間刻みの風=中央値（括弧でMAX併記） ／ 風向=循環平均\n`;
   s+=`天気記号の注意: weather_codeは雲量+降水から算出（梅雨は湿度高で弱雨が出やすい）。記号は降水の強度(mm/h)で判定し、ごく弱い霧雨(0.1mm/h未満)は曇りに丸めるので合計降水mmが少量でも記号は曇りのことがある。快晴☀️/晴れ🌤️/薄曇り⛅/曇り☁️は区別。行動判断は降水量mm＋低層雲%を優先。雷⛈️は同時刻に2モデル以上が発雷を示した時のみ表示（降水0mmでも雷だけ立つことあり＝CAPE/CINで別判断）\n`;
   s+=`\n■ 総観（気圧配置・前線・台風・複数日の流れ）\n  ※ここはソナがWeb確認で補完する欄\n`;
 
@@ -996,32 +1000,45 @@ function renderSummary(){
       const gmx=maxOf("wind_gusts_10m",idx);
       const tmn=minOf("temperature_2m",idx), tmx=maxOf("temperature_2m",idx);
       const amn=minOf("apparent_temperature",idx);
-      const cl=med("cloud_cover_low",idx), cm=med("cloud_cover_mid",idx), ch=med("cloud_cover_high",idx);
-      const rain=sumMed("rain",idx), snow=sumMed("snowfall",idx), pp=sumMed("precipitation",idx);
-      const wc=worstWeatherCode(idx);
+      // 変動項目（雲・降水・天気）は中央値とMAXを両方算出して併記
+      const clM=withMode('median',()=>med("cloud_cover_low",idx)), cmM=withMode('median',()=>med("cloud_cover_mid",idx)), chM=withMode('median',()=>med("cloud_cover_high",idx));
+      const clX=withMode('max',()=>med("cloud_cover_low",idx)), cmX=withMode('max',()=>med("cloud_cover_mid",idx)), chX=withMode('max',()=>med("cloud_cover_high",idx));
+      const ppM=withMode('median',()=>sumMed("precipitation",idx)), ppX=withMode('max',()=>sumMed("precipitation",idx));
+      const rainM=withMode('median',()=>sumMed("rain",idx)), snowM=withMode('median',()=>sumMed("snowfall",idx));
+      const wcM=withMode('median',()=>worstWeatherCode(idx)), wcX=withMode('max',()=>worstWeatherCode(idx));
       const wstr=wmn==null?"—":r(wmn)+"-"+r(wmx);
       const gstr=gmx==null?"":` 突${r(gmx)}`;
       const tstr=tmn==null?"—":r(tmn)+"-"+r(tmx);
       const astr=amn==null?"":`(体感${r(amn)})`;
       const dstr=dir==null?"":dirName(dir)+" ";
-      const ptype=precipType(rain,snow,wc,idx.length);
-      const pstr=ptype==="なし"?"降水なし":`${ptype}${pp.toFixed(1)}mm`;
-      s+=`  ${nm}(${rg}時): ${dstr}${wstr}${gstr} / ${tstr}℃${astr} / 雲 ${r(cl)}/${r(cm)}/${r(ch)} / ${pstr} / ${wcode(wc)}\n`;
+      const ptype=precipType(rainM,snowM,wcM,idx.length);
+      const cloudM=`${r(clM)}/${r(cmM)}/${r(chM)}`, cloudX=`${r(clX)}/${r(cmX)}/${r(chX)}`;
+      const cloudStr=(cloudM===cloudX)?cloudM:`${cloudM}（MAX ${cloudX}）`;
+      const pstrM=ptype==="なし"?"降水なし":`${ptype}${ppM.toFixed(1)}mm`;
+      const pstr=(Math.abs(ppM-ppX)<0.05)?pstrM:`${pstrM}（MAX ${ppX.toFixed(1)}mm）`;
+      const wsym=(wcM===wcX)?wcode(wcM):`${wcode(wcM)}（MAX ${wcode(wcX)}）`;
+      s+=`  ${nm}(${rg}時): ${dstr}${wstr}${gstr} / ${tstr}℃${astr} / 雲 ${cloudStr} / ${pstr} / ${wsym}\n`;
     });
 
     // 3時間刻み
-    s+=`■ 3時間刻み（5モデル中央値／突風(10m)のみ最大・風${L.main}）\n`;
+    s+=`■ 3時間刻み（中央値／括弧でMAX併記・突風(10m)は最大・風${L.main}）\n`;
     [3,6,9,12,15,18,21].forEach(h=>{
       const i=idxAt(date,h); if(i<0) return;
       const w=valsAt("wind_speed_"+L.main+"hPa",i).filter(v=>v!=null);
       const g=valsAt("wind_gusts_10m",i).filter(v=>v!=null);
       const lo=valsAt("cloud_cover_low",i).filter(v=>v!=null);
       const pr=valsAt("precipitation",i).filter(v=>v!=null);
-      const wMed=w.length?Math.round(agg(w)):null;  // 風速も中央値に統一（1モデルの外れ値を消す。低層雲・降水と揃える）
+      const wMed=w.length?Math.round(withMode('median',()=>agg(w))):null;
+      const wMax=w.length?Math.round(withMode('max',()=>agg(w))):null;
       const gMax=g.length?Math.max(...g):null;          // 突風は瞬間最大で行動可否が決まるためmax
-      const loMed=lo.length?Math.round(agg(lo)):null;
-      const pMed=pr.length?(agg(pr)||0):0;
-      s+=`  ${String(h).padStart(2,"0")}時: 風${r(wMed)}${gMax!=null?" 突"+r(gMax):""} / 低層雲${r(loMed)} / 雨${pMed.toFixed(1)}\n`;
+      const loMed=lo.length?Math.round(withMode('median',()=>agg(lo))):null;
+      const loMax=lo.length?Math.round(withMode('max',()=>agg(lo))):null;
+      const pMed=pr.length?(withMode('median',()=>agg(pr))||0):0;
+      const pMax=pr.length?(withMode('max',()=>agg(pr))||0):0;
+      const wS=(wMed===wMax)?r(wMed):`${r(wMed)}（M${r(wMax)}）`;
+      const loS=(loMed===loMax)?r(loMed):`${r(loMed)}（M${r(loMax)}）`;
+      const pS=(Math.abs(pMed-pMax)<0.05)?pMed.toFixed(1):`${pMed.toFixed(1)}（M${pMax.toFixed(1)}）`;
+      s+=`  ${String(h).padStart(2,"0")}時: 風${wS}${gMax!=null?" 突"+r(gMax):""} / 低層雲${loS} / 雨${pS}\n`;
     });
 
     // 稜線の風 モデル一致度（主役面＋補助/挟み面）
@@ -1092,7 +1109,7 @@ initPresets();
 $("#go").onclick=fetchForecast;
 $("#geo").onclick=geocode;
 $("#copy").onclick=copySummary;
-$("#agg").onchange=function(){ AGG_MODE=this.value; if(DATA){ renderFocus(); } }; // 集計モード切替→表とテキストを再描画
+$("#agg").onchange=function(){ AGG_MODE=this.value; if(DATA){ renderTable(); } }; // 表だけ切替（コピペ文面は常時 中央値/MAX 併記＝AGG_MODE非依存なので再描画不要）
 $("#qname").addEventListener("keydown",e=>{ if(e.key==="Enter") geocode(); });
 // 座標・標高を手入力したらDB標高照合を無効化（手入力値は登録DBと無関係なため）
 ["#lat","#lng","#elev"].forEach(id=>$(id).addEventListener("input",()=>{ EXPECT_ELEV=null; }));
