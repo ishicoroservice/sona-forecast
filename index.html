@@ -327,6 +327,7 @@ const MODELS = [
 const CAPE_MODELS = ["gfs_seamless","ecmwf_ifs025","icon_seamless"]; // 雷(CAPE)を返すモデル
 const WIND_SCALE = 30; // m/s, バーの最大目盛
 const PRECIP_RATE_FLOOR = 0.1; // mm/h。時間あたりの降水強度がこれ未満なら「降水なし／曇り」扱い（梅雨の霧雨ノイズ除去）。合計でなく強度で見るのでバンド長(時刻数)に左右されない。天気記号と種別ラベルで共用
+const SNOW_FLOOR = 0.1; // cm。これ未満の降雪は装備判断に影響しない量として無視（雪/霙の判定・雪優勢判定で共用）
 
 // ── 追加機能（2026/6）の定数 ───────────────────────────
 // AOD(エアロゾル光学的厚さ550nm)→「遠望クリア度」のしきい値。雲とは別軸で遠景の霞みを表す。first-passの目安で実地検証で要調整
@@ -455,8 +456,8 @@ function precipType(rain, snow, wc, hours){
   const th = wc!=null && wc>=95, hail = wc===96||wc===99;
   const rRate = (hours&&hours>0) ? rain/hours : rain;   // 雨の強度 mm/h（バンド長に依存しない）
   const rainWet = rRate>=PRECIP_RATE_FLOOR;             // ごく弱い霧雨は「降水なし」扱い＝天気記号の丸めと整合。雪は少量でも装備判断に効くので合計で残す
-  if(snow>0.1 && rainWet) return "霙";
-  if(snow>0.1) return th?"雷雪":"雪";
+  if(snow>SNOW_FLOOR && rainWet) return "霙";
+  if(snow>SNOW_FLOOR) return th?"雷雪":"雪";
   if(rainWet) return hail?"雨+雹":(th?"雷雨":"雨");
   if(th) return hail?"雷雨(雹)":"雷雨";
   return "なし";
@@ -525,7 +526,7 @@ function worstWeatherCode(idxList){
     const rhTop=rhV.length?median(rhV):null;
     if(rhTop!=null && rhTop>=RH_GAS_FLOOR) rank=4;
   }
-  const isSnow = snowSum>0.1 && snowSum>rainSum;         // 雪量(cm)が雨量(mm)を上回れば雪優勢
+  const isSnow = snowSum>SNOW_FLOOR && snowSum>rainSum;         // 雪量(cm)が雨量(mm)を上回れば雪優勢
   return rankToCode(rank, isSnow);
 }
 // 雲海/ガス判定: 低層雲・rh700(山頂高度)・rh850(中腹)。山頂が乾けば雲海、湿ればガス
@@ -1255,7 +1256,7 @@ function renderSummary(){
   s+=`モデル順: ECMWF / GFS / GSM / MSM / ICON（5モデル）\n`;
   s+=`稜線の風の読み: ${lvlNote}\n`;
   s+=`集計表示: このテキストは中央値とMAXを常に併記（括弧 MAX=悲観・割れた日に最悪を拾う値）※画面の表はプルダウンで片方表示だが、ソナへの素材は両方渡す\n`;
-  s+=`集計の読み方: 風・気温=5モデルのレンジ(最小-最大＝予報の割れ幅) ／ 体感=最も冷える値(min) ／ 突風・CAPE=最大(安全側) ／ 雲・降水・3時間刻みの風=中央値（括弧でMAX併記） ／ 風向=循環平均\n`;
+  s+=`集計の読み方: 気温・地上風=5モデルのレンジ(最小-最大＝予報の割れ幅) ／ 稜線風=気圧面により3〜5モデル(800hPaはECMWF/GSM欠で3) ／ 体感=最も冷える値(min) ／ 突風・CAPE=最大(安全側) ／ 雲・降水・3時間刻みの風=中央値（括弧でMAX併記） ／ 風向=循環平均\n`;
   s+=`天気記号の注意: weather_codeは雲量+降水から算出（梅雨は湿度高で弱雨が出やすい）。記号は降水の強度(mm/h)で判定し、ごく弱い霧雨(0.1mm/h未満)は曇りに丸めるので合計降水mmが少量でも記号は曇りのことがある。快晴☀️/晴れ🌤️/薄曇り⛅/曇り☁️は区別。行動判断は降水量mm＋低層雲%を優先。雷⛈️は同時刻に2モデル以上が発雷を示した時のみ表示（降水0mmでも雷だけ立つことあり＝CAPE/CINで別判断）\n`;
   s+=`追加データ: ${DATA.ens?`アンサンブル${ensCount()}メンバー(GFS+ECMWF)で降水確率・雷の芽(CAPE超過率)を併記`:`アンサンブル=取得なし`} ／ ${DATA.aq?`AODで遠望クリア度(雲とは別軸の遠景の霞み)`:`遠望AOD=取得なし`}。いずれもsurface系で、800hPa帯の稜線風は従来どおり5モデル決定論で読む（アンサンブルは800hPa風を欠くため）\n`;
   s+=`\n■ 総観（気圧配置・前線・台風・複数日の流れ）\n  ※ここはソナがWeb確認で補完する欄\n`;
