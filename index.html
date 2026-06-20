@@ -426,6 +426,7 @@ let FOCUS = null;      // 表示中の日付 YYYY-MM-DD
 let EXPECT_ELEV = null; // 選択した山のDB標高。予報取得時のDEM標高と照合して座標の妥当性をチェック
 let SEL = null;        // 選択中の山のメタ {name,rank,aliases,lat,lng,source}。コピペ文面の山名/rank/別名/入力座標・座標照合に使う
 const RANK_PRI = {1:0, 2:1, 3:2, 0:3, 4:4}; // 同名ソートの優先：百>二百>三百>主要ピーク>里山
+let GSI_HSRC = null;   // 国土地理院DEMの解像度（getelevationのhsrc。例 "5m（レーザ）"）。標高ラベルを実解像度で出すため
 
 // ---- helpers ----
 const $ = s => document.querySelector(s);
@@ -596,6 +597,9 @@ function cinRead(v){
   return ["蓋つよい","発雷を抑える","var(--calm)"];
 }
 function fmtElev(m){ return Number(m).toLocaleString("ja-JP") + "m"; }
+// 国土地理院DEMの標高ラベル。getelevationのhsrcから実解像度("5m"等)を抜いて厳密に表記（取れなければ"国土地理院DEM"）
+function gsiRes(){ const m=(GSI_HSRC||"").match(/(\d+)\s*m/); return m?(m[1]+"m"):null; }
+function gsiLabel(){ const r=gsiRes(); return r?("国土地理院"+r):"国土地理院DEM"; }
 
 // ---- init ----
 function applyPreset(){
@@ -604,8 +608,9 @@ function applyPreset(){
     $("#lat").value=p.lat; $("#lng").value=p.lng; $("#elev").value=""; $("#qname").value=""; EXPECT_ELEV=p.elev;
     clearCand();
     const nm=p.label.split(" (")[0];
-    SEL={name:nm, rank:(p.rank!=null?p.rank:null), aliases:[], lat:p.lat, lng:p.lng, source:"preset"};
-    setStatus(`📍 ${nm}${rankBadge(p.rank)} 登録標高${p.elev}mをセット。予報取得時にDEM標高と照合するよ。`,false);
+    const meiz=MEIZAN.find(x=>normMt(x[0])===normMt(nm)); // DBに同名があれば別名/rankを補完（検索ピックと表示を揃える）
+    SEL={name:nm, rank:(p.rank!=null?p.rank:(meiz?meiz[3]:null)), aliases:(meiz&&meiz[4])?meiz[4]:[], lat:p.lat, lng:p.lng, source:"preset"};
+    setStatus(`📍 ${nm}${rankBadge(p.rank)} 登録標高${fmtElev(p.elev)}をセット。予報取得時にDEM標高と照合するよ。`,false);
   }
 }
 function initPresets(){
@@ -620,11 +625,16 @@ function initPresets(){
 // ---- geocoding ----
 // 外部ジオコーダ（すべてfail-soft：CORS/エラーは空配列にして連鎖を止めない）。返り値は共通形に正規化。
 function isPeakish(g){ return /^(MT|PK|VLC|HLL|MTS|PKS)/.test(g.feature_code||""); }
+// タイムアウト付きfetch（応答しない/遅いジオコーダで検索が固まらないよう6秒でabort→catch側で空配列に落ちる）
+async function fetchT(url, ms){
+  const c=new AbortController(); const t=setTimeout(()=>c.abort(), ms||6000);
+  try{ return await fetch(url, {signal:c.signal}); } finally{ clearTimeout(t); }
+}
 // OSM/Nominatim：日本のマイナー山(natural=peak)に強い。山頂ノードはeleを持つのでDEM照合が効く
 async function geoOSM(q){
   try{
     const u=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&countrycodes=jp&limit=8&extratags=1&accept-language=ja`;
-    const r=await fetch(u); if(!r.ok) return [];
+    const r=await fetchT(u); if(!r.ok) return [];
     const j=await r.json();
     return (j||[]).map(x=>{
       let fc="";
@@ -641,7 +651,7 @@ async function geoOSM(q){
 async function geoGSI(q){
   try{
     const u=`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(q)}`;
-    const r=await fetch(u); if(!r.ok) return [];
+    const r=await fetchT(u); if(!r.ok) return [];
     const j=await r.json();
     return (j||[]).filter(x=>x.geometry&&x.geometry.coordinates).map(x=>({
       name:((x.properties&&x.properties.title)||q).trim(),
@@ -656,7 +666,7 @@ async function geoGSI(q){
 async function geoOM(q){
   try{
     const u=`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=10&language=ja&format=json`;
-    const r=await fetch(u); if(!r.ok) return [];
+    const r=await fetchT(u); if(!r.ok) return [];
     const j=await r.json();
     return (j.results||[]).map(x=>({name:x.name, latitude:x.latitude, longitude:x.longitude,
       elevation:(x.elevation!=null?x.elevation:null), admin1:x.admin1||null, country:x.country||"日本",
@@ -741,12 +751,12 @@ function renderCand(list, prefHint, elevHint){
     if(g._meizan){
       const rm=meizanRank(g);
       badge=`<span class="cn-badge ${rm.cls}">${rm.label}</span>`;
-      right=`${g.elevation!=null?Math.round(g.elevation)+"m · ":""}${g.latitude.toFixed(3)}, ${g.longitude.toFixed(3)}`;
+      right=`${g.elevation!=null?fmtElev(Math.round(g.elevation))+" · ":""}${g.latitude.toFixed(3)}, ${g.longitude.toFixed(3)}`;
     }else{
-      const srcN = g._src==="OSM"?"OSM" : g._src==="GSI"?"地理院" : g._src==="OM"?"Open-Meteo" : "web";
+      const srcN = g._src==="OSM"?"OSM" : g._src==="GSI"?"地理院地図" : g._src==="OM"?"Open-Meteo" : "web";
       badge=`<span class="cn-badge r-web">${srcN}</span>`;
       const pl=candPlace(g);
-      const el=g.elevation!=null ? Math.round(g.elevation)+"m" : "標高—";
+      const el=g.elevation!=null ? fmtElev(Math.round(g.elevation)) : "標高—";
       right=`${[pl,el].filter(Boolean).join(" · ")} · ${g.latitude.toFixed(3)}, ${g.longitude.toFixed(3)}`;
     }
     const aliTxt=(g._meizan && g.aliases && g.aliases.length)?`<span class="cn-alias">／${g.aliases[0]}</span>`:"";
@@ -764,15 +774,15 @@ function pickCand(g){
     $("#elev").value="";            // 空にしてDEM標高を取得→DB標高と照合
     EXPECT_ELEV=g.elevation;
     SEL={name:g.name, rank:g.rank, aliases:g.aliases||[], lat:g.latitude, lng:g.longitude, source:"meizan"};
-    setStatus(`📍 ${g.name}${rankBadge(g.rank)} 登録標高${g.elevation!=null?Math.round(g.elevation)+"m":"—"}をセット。予報取得時にDEM標高と照合するよ。`,false);
+    setStatus(`📍 ${g.name}${rankBadge(g.rank)} 登録標高${g.elevation!=null?fmtElev(Math.round(g.elevation)):"—"}をセット。予報取得時にDEM標高と照合するよ。`,false);
   }else{
-    $("#elev").value="";            // 空にしてGSI 1m実標高を取得（GeoNamesの粗い標高より正確）
+    $("#elev").value="";            // 空にして国土地理院DEMの実標高を取得（GeoNamesの粗い標高より正確）
     // OSMの山頂ノードはeleが信頼でき座標も山頂なのでDEM照合を効かせる。地理院/Open-Meteoは照合オフ
     EXPECT_ELEV=(g._src==="OSM" && g.elevation!=null) ? g.elevation : null;
     SEL={name:g.name, rank:null, aliases:[], lat:g.latitude, lng:g.longitude, source:(g._src||"web")};
-    const srcN = g._src==="OSM"?"OSM(山頂ノード)" : g._src==="GSI"?"地理院地図" : g._src==="OM"?"Open-Meteo" : "web";
-    const elTxt = g.elevation!=null?`参考標高${Math.round(g.elevation)}m`:"標高はGSIで取得";
-    const tail = EXPECT_ELEV!=null ? "予報取得時にDEM標高で座標照合するよ。" : "取得時にGSI実標高で気温補正。座標が山頂とズレてたら手で直してね。";
+    const srcN = g._src==="OSM"?"OSM" : g._src==="GSI"?"地理院地図" : g._src==="OM"?"Open-Meteo" : "web";
+    const elTxt = g.elevation!=null?`参考標高${fmtElev(Math.round(g.elevation))}`:"標高は国土地理院DEMで取得";
+    const tail = EXPECT_ELEV!=null ? "予報取得時にDEM標高で座標照合するよ。" : "取得時に国土地理院DEMで気温補正。座標が山頂とズレてたら手で直してね。";
     setStatus(`📍 ${g.name}（${srcN}・${elTxt}）をセット。${tail}`,false);
   }
 }
@@ -788,7 +798,7 @@ async function fetchForecast(){
   const btn=$("#go"); btn.disabled=true; btn.textContent="取得中…";
   setStatus("5モデル取得中…",false);
   try{
-    // 手入力が無ければGSIの1m実標高を取り、forecastの&elevation=に注入（山頂の気温・体感の補正を精緻化）
+    // 手入力が無ければ国土地理院DEMの実標高(5m/10m)を取り、forecastの&elevation=に注入（山頂の気温・体感の補正を精緻化）
     let gsiElev=null;
     if(!manualElev){ gsiElev=await gsiElevation(lat,lng); if(gsiElev!=null) elev=gsiElev; }
     const elevPart = isNaN(elev) ? "" : `&elevation=${Math.round(elev)}`;
@@ -798,7 +808,7 @@ async function fetchForecast(){
     const j=await r.json();
     DATA=shape(j);
     DATA.gsiElev=gsiElev;
-    DATA.elevSrc = manualElev ? "手入力" : (gsiElev!=null ? "GSI 1m実測" : "Open-Meteo DEM");
+    DATA.elevSrc = manualElev ? "手入力" : (gsiElev!=null ? gsiLabel() : "Open-Meteo DEM");
     FOCUS=DATA.dates[0];
     // 追加データ（fail-soft：エラーでもnullになるだけで本体予報は完走。ステータスは「5モデル取得中…」のまま）
     DATA.ens = await fetchEnsemble(lat,lng,days, isNaN(elev)?null:elev);
@@ -848,11 +858,14 @@ function valsAt(varName, i){
 // ============ 追加データ：GSI標高・アンサンブル確率・AOD遠望（すべてfail-soft：落ちても本体は完走）============
 // 国土地理院DEM(1mレーザ)。山頂の実標高→forecastの&elevation=に注入し気温補正を精緻化。日本国外/海上/範囲外はnull（CORS *・確認済み）
 async function gsiElevation(lat,lng){
+  GSI_HSRC=null;
   try{
     const u=`https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php?lon=${lng}&lat=${lat}&outtype=JSON`;
     const r=await fetch(u); if(!r.ok) return null;
     const j=await r.json(); const e=parseFloat(j.elevation);
-    return (isFinite(e) && e>-500) ? e : null;   // -9999/海上/範囲外を除外
+    if(!(isFinite(e) && e>-500)) return null;   // -9999/海上/範囲外を除外
+    GSI_HSRC=(typeof j.hsrc==="string")?j.hsrc:null;   // 実解像度を控える（例 "5m（レーザ）"）
+    return e;
   }catch(_){ return null; }
 }
 // アンサンブル：GFS(31)+ECMWF(51)=計82メンバー。CAPE・降水・気温・低層雲・各面の風を確率化（800hPa風は欠測＝実測確認済み）
@@ -941,11 +954,11 @@ function demVerdict(){
   if(EXPECT_ELEV==null || !DATA || DATA.meta.elev==null) return null;
   const elev=Math.round(DATA.meta.elev);
   const diff=Math.round(Math.abs(DATA.meta.elev-EXPECT_ELEV));
-  const srcLbl=(DATA.gsiElev!=null)?"GSI実標高":"実標高(DEM)";
+  const srcLbl=(DATA.gsiElev!=null)?(gsiLabel()+"実標高"):"実標高(DEM)";
   const ok=diff<=150;
   return { ok, diff, elev, srcLbl,
-    okText:`✓ 標高照合OK（${srcLbl}${elev}m≒登録${EXPECT_ELEV}m）`,
-    ngText:`⚠ 座標要確認（${srcLbl}${elev}m vs 登録${EXPECT_ELEV}m＝${diff}m差）` };
+    okText:`✓ 標高照合OK（${srcLbl}${fmtElev(elev)}≒登録${fmtElev(EXPECT_ELEV)}）`,
+    ngText:`⚠ 座標要確認（${srcLbl}${fmtElev(elev)} vs 登録${fmtElev(EXPECT_ELEV)}＝${fmtElev(diff)}差）` };
 }
 function renderAll(){ renderMeta(); renderDays(); renderFocus(); $("#results").classList.add("show"); }
 
@@ -1200,7 +1213,7 @@ function renderSummary(){
   const inLat=parseFloat($("#lat").value), inLng=parseFloat($("#lng").value);
   const srcLabel = SEL ? ({meizan:"バックデータDB",preset:"プリセット",OSM:"OSM",GSI:"地理院地図",OM:"Open-Meteo",manual:"手入力",web:"web"}[SEL.source]||SEL.source) : "—";
   const v=demVerdict();
-  let s=`=== ソナ予報インプット｜${selName}(${m.elev!=null?Math.round(m.elev).toLocaleString()+"m":"標高—"}${DATA.elevSrc?"・"+DATA.elevSrc:""}) ===\n`;
+  let s=`=== ソナ予報インプット｜${selName}(${m.elev!=null?fmtElev(Math.round(m.elev)):"標高—"}${DATA.elevSrc?"・"+DATA.elevSrc:""}) ===\n`;
   s+=`山頂座標 ${isNaN(inLat)?"—":inLat.toFixed(5)},${isNaN(inLng)?"—":inLng.toFixed(5)}（入力＝座標照合用・出所:${srcLabel}）／ grid ${m.lat.toFixed(3)},${m.lng.toFixed(3)}（モデル格子）\n`;
   s+=`座標照合: ${v?(v.ok?v.okText:v.ngText+"＝山頂を外してる疑い、予報前に座標確認推奨"):"照合なし（バックデータ外/手入力＝ソナ側でDEM裏取り推奨）"}\n`;
   s+=`取得 ${f.getMonth()+1}/${f.getDate()} ${hh}:${mm}JST(全球6h更新) / 全${DATA.dates.length}日分\n`;
