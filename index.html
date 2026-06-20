@@ -138,6 +138,7 @@ button:active{transform:translateY(1px)}
 .cn-badge.r3{background:rgba(95,176,229,.15);color:var(--sky);border-color:rgba(95,176,229,.4)}
 .cn-badge.r0{background:rgba(190,198,210,.16);color:#cdd6e2;border-color:rgba(190,198,210,.45)}
 .cn-badge.r4{background:rgba(167,139,202,.18);color:#c9b1f0;border-color:rgba(167,139,202,.5)}
+.cn-badge.r-web{background:rgba(120,134,150,.16);color:#9fb0c2;border-color:rgba(120,134,150,.45)}
 .cn-alias{font-size:11px;color:var(--mist);font-weight:400}
 
 /* results */
@@ -423,6 +424,8 @@ function withMode(mode, fn){ const prev=AGG_MODE; AGG_MODE=mode; try{ return fn(
 let DATA = null;       // 取得した整形済みデータ
 let FOCUS = null;      // 表示中の日付 YYYY-MM-DD
 let EXPECT_ELEV = null; // 選択した山のDB標高。予報取得時のDEM標高と照合して座標の妥当性をチェック
+let SEL = null;        // 選択中の山のメタ {name,rank,aliases,lat,lng,source}。コピペ文面の山名/rank/別名/入力座標・座標照合に使う
+const RANK_PRI = {1:0, 2:1, 3:2, 0:3, 4:4}; // 同名ソートの優先：百>二百>三百>主要ピーク>里山
 
 // ---- helpers ----
 const $ = s => document.querySelector(s);
@@ -601,6 +604,7 @@ function applyPreset(){
     $("#lat").value=p.lat; $("#lng").value=p.lng; $("#elev").value=""; $("#qname").value=""; EXPECT_ELEV=p.elev;
     clearCand();
     const nm=p.label.split(" (")[0];
+    SEL={name:nm, rank:(p.rank!=null?p.rank:null), aliases:[], lat:p.lat, lng:p.lng, source:"preset"};
     setStatus(`📍 ${nm}${rankBadge(p.rank)} 登録標高${p.elev}mをセット。予報取得時にDEM標高と照合するよ。`,false);
   }
 }
@@ -614,6 +618,52 @@ function initPresets(){
 }
 
 // ---- geocoding ----
+// 外部ジオコーダ（すべてfail-soft：CORS/エラーは空配列にして連鎖を止めない）。返り値は共通形に正規化。
+function isPeakish(g){ return /^(MT|PK|VLC|HLL|MTS|PKS)/.test(g.feature_code||""); }
+// OSM/Nominatim：日本のマイナー山(natural=peak)に強い。山頂ノードはeleを持つのでDEM照合が効く
+async function geoOSM(q){
+  try{
+    const u=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&countrycodes=jp&limit=8&extratags=1&accept-language=ja`;
+    const r=await fetch(u); if(!r.ok) return [];
+    const j=await r.json();
+    return (j||[]).map(x=>{
+      let fc="";
+      if(x.category==="natural"){ fc=(x.type==="peak")?"MT":(x.type==="volcano")?"VLC":(x.type==="hill")?"HLL":"MT"; }
+      else if(x.category==="place"){ fc="PPL"; }
+      const eRaw=(x.extratags&&x.extratags.ele!=null)?parseFloat(x.extratags.ele):NaN;
+      const nm=(x.name||(x.display_name||"").split(",")[0]||q).trim();
+      return {name:nm, latitude:parseFloat(x.lat), longitude:parseFloat(x.lon),
+              elevation:isNaN(eRaw)?null:Math.round(eRaw), admin1:null, country:"日本", feature_code:fc, _src:"OSM"};
+    }).filter(g=>!isNaN(g.latitude)&&!isNaN(g.longitude));
+  }catch(e){ return []; }
+}
+// 国土地理院 地理院地図検索：日本の自然地名(山名ラベル)を返す公式ソース。eleは無し（座標はGSI DEMで裏取り）
+async function geoGSI(q){
+  try{
+    const u=`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(q)}`;
+    const r=await fetch(u); if(!r.ok) return [];
+    const j=await r.json();
+    return (j||[]).filter(x=>x.geometry&&x.geometry.coordinates).map(x=>({
+      name:((x.properties&&x.properties.title)||q).trim(),
+      latitude:parseFloat(x.geometry.coordinates[1]), longitude:parseFloat(x.geometry.coordinates[0]),
+      elevation:null, admin1:null, country:"日本", feature_code:"", _src:"GSI"
+    })).filter(g=>!isNaN(g.latitude)&&!isNaN(g.longitude))
+       .filter(g=> g.name.indexOf(q)>=0 || /[岳山峰嶽森塚]$/.test(g.name))
+       .slice(0,5);
+  }catch(e){ return []; }
+}
+// Open-Meteo ジオコーダ（従来の最後の砦。穴は多いが僧ヶ岳など拾えるものもある）
+async function geoOM(q){
+  try{
+    const u=`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=10&language=ja&format=json`;
+    const r=await fetch(u); if(!r.ok) return [];
+    const j=await r.json();
+    return (j.results||[]).map(x=>({name:x.name, latitude:x.latitude, longitude:x.longitude,
+      elevation:(x.elevation!=null?x.elevation:null), admin1:x.admin1||null, country:x.country||"日本",
+      feature_code:x.feature_code||"", _src:"OM"}));
+  }catch(e){ return []; }
+}
+
 async function geocode(){
   const raw=$("#qname").value.trim();
   if(!raw){ setStatus("山名を入れてね",false); clearCand(); return; }
@@ -628,28 +678,46 @@ async function geocode(){
   if(!nameQ){ setStatus("山名も入れてね（例：笠ヶ岳 長野／笠ヶ岳 2898）",true); clearCand(); return; }
 
   setStatus("検索中…",false); clearCand();
-  // 三百名山DBを最優先（山頂座標が正確）
+  // 山岳バックデータDBを最優先（山頂座標が検証済みで正確）
   const meizanHits = searchMeizan(nameQ).map(meizanToG);
+  // web結果のスコア：DBは別格、山(MT/PK/VLC)は加点・居住地(PPL)は減点、県/標高ヒントで加点
   const scoreOf=(g)=>{
     let s = g._meizan ? 1000 : 0;
+    if(!g._meizan){
+      const fc=g.feature_code||"";
+      if(/^(MT|PK|VLC)/.test(fc)) s+=40;            // 山・峰・火山を上に
+      else if(/^(HLL|RDGE|UPLD|MTS|PKS)/.test(fc)) s+=20; // 丘・尾根
+      else if(/^PPL/.test(fc)) s-=20;               // 同名の町・集落は下げる
+    }
     if(prefHint && g.admin1 && g.admin1.includes(prefHint)) s+=100;
     if(elevHint!=null && g.elevation!=null) s+=Math.max(0, 60-Math.abs(g.elevation-elevHint)/15);
     return s;
   };
+  // 同点（≒DB同名群）はrank優先→標高降順で「人気・高峰」を上に並べる
+  const cmp=(a,b)=>{
+    const ds=scoreOf(b)-scoreOf(a); if(ds) return ds;
+    const ra=a._meizan?(RANK_PRI[a.rank]==null?9:RANK_PRI[a.rank]):9;
+    const rb=b._meizan?(RANK_PRI[b.rank]==null?9:RANK_PRI[b.rank]):9;
+    if(ra!==rb) return ra-rb;
+    const ea=(a.elevation==null?-1:a.elevation), eb=(b.elevation==null?-1:b.elevation);
+    return eb-ea;
+  };
   try{
-    const u=`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(nameQ)}&count=10&language=ja&format=json`;
-    const r=await fetch(u);
-    const j=await r.json();
-    let om=(j.results||[]);
-    // 名山と座標が近いOpen-Meteo結果は重複として除外
-    om = om.filter(g=>!meizanHits.some(m=>Math.abs(m.latitude-g.latitude)<0.05 && Math.abs(m.longitude-g.longitude)<0.05));
-    let results=[...meizanHits, ...om].sort((a,b)=>scoreOf(b)-scoreOf(a));
-    if(!results.length){ setStatus(`「${nameQ}」が見つからなかった。緯度経度を手で入れてみて。`,true); return; }
+    // 3ジオコーダを並列で叩く（各fail-soft）：OSM=マイナー山に強い / 地理院=公式 / Open-Meteo=最後の砦
+    const [osmR, gsiR, omR] = await Promise.all([geoOSM(nameQ), geoGSI(nameQ), geoOM(nameQ)]);
+    let osm=osmR; { const p=osm.filter(isPeakish); if(p.length) osm=p; } // 山っぽいものがあればそれを優先（同名の町を除く）
+    const near=(a,b,th)=>Math.abs(a.latitude-b.latitude)<th && Math.abs(a.longitude-b.longitude)<th;
+    // DB(gold)と近いweb結果は重複として捨てる（DBの正確な山頂座標を優先）
+    let web=[...osm, ...gsiR, ...omR].filter(g=>!meizanHits.some(m=>near(m,g,0.05)));
+    // web同士の重複もまとめる（concat順＝OSM>地理院>Open-Meteoの優先で先勝ち）
+    const dd=[]; web.forEach(g=>{ if(!dd.some(d=>near(d,g,0.02))) dd.push(g); }); web=dd;
+    let results=[...meizanHits, ...web].sort(cmp);
+    if(!results.length){ setStatus(`「${nameQ}」が見つからなかった。緯度経度を手で入れてみて（バックデータ外＋ジオコーダ未収録の可能性）。`,true); return; }
     if(results.length===1){ pickCand(results[0]); return; }
     setStatus("",false);
     renderCand(results, prefHint, elevHint);
   }catch(e){
-    // Open-Meteoが落ちても名山ヒットがあれば出す
+    // 想定外エラー：DBヒットだけでも出す
     if(meizanHits.length===1){ pickCand(meizanHits[0]); return; }
     if(meizanHits.length){ setStatus("",false); renderCand(meizanHits, prefHint, elevHint); return; }
     setStatus(`検索に失敗。緯度経度を手入力すれば取得できるよ。<br><span style="opacity:.6">${e.message}</span>`,true);
@@ -675,10 +743,11 @@ function renderCand(list, prefHint, elevHint){
       badge=`<span class="cn-badge ${rm.cls}">${rm.label}</span>`;
       right=`${g.elevation!=null?Math.round(g.elevation)+"m · ":""}${g.latitude.toFixed(3)}, ${g.longitude.toFixed(3)}`;
     }else{
-      badge="";
-      const pl=candPlace(g)||"—";
+      const srcN = g._src==="OSM"?"OSM" : g._src==="GSI"?"地理院" : g._src==="OM"?"Open-Meteo" : "web";
+      badge=`<span class="cn-badge r-web">${srcN}</span>`;
+      const pl=candPlace(g);
       const el=g.elevation!=null ? Math.round(g.elevation)+"m" : "標高—";
-      right=`${pl} · ${el}`;
+      right=`${[pl,el].filter(Boolean).join(" · ")} · ${g.latitude.toFixed(3)}, ${g.longitude.toFixed(3)}`;
     }
     const aliTxt=(g._meizan && g.aliases && g.aliases.length)?`<span class="cn-alias">／${g.aliases[0]}</span>`:"";
     html+=`<button class="cand-btn" data-i="${i}"><span class="cn">${g.name}${aliTxt}${badge}</span><span class="cm">${right}</span></button>`;
@@ -694,13 +763,17 @@ function pickCand(g){
   if(g._meizan){
     $("#elev").value="";            // 空にしてDEM標高を取得→DB標高と照合
     EXPECT_ELEV=g.elevation;
+    SEL={name:g.name, rank:g.rank, aliases:g.aliases||[], lat:g.latitude, lng:g.longitude, source:"meizan"};
     setStatus(`📍 ${g.name}${rankBadge(g.rank)} 登録標高${g.elevation!=null?Math.round(g.elevation)+"m":"—"}をセット。予報取得時にDEM標高と照合するよ。`,false);
   }else{
-    if(g.elevation!=null) $("#elev").value=Math.round(g.elevation);
-    else $("#elev").value="";
-    EXPECT_ELEV=null;               // web結果は照合対象外（座標が山頂を指す保証がない）
-    const place=candPlace(g), el=g.elevation!=null ? Math.round(g.elevation)+"m" : "標高—";
-    setStatus(`📍 ${g.name}${place?(" / "+place):""}（${el}）をセット。標高が山頂とズレてたら手で直してね。`,false);
+    $("#elev").value="";            // 空にしてGSI 1m実標高を取得（GeoNamesの粗い標高より正確）
+    // OSMの山頂ノードはeleが信頼でき座標も山頂なのでDEM照合を効かせる。地理院/Open-Meteoは照合オフ
+    EXPECT_ELEV=(g._src==="OSM" && g.elevation!=null) ? g.elevation : null;
+    SEL={name:g.name, rank:null, aliases:[], lat:g.latitude, lng:g.longitude, source:(g._src||"web")};
+    const srcN = g._src==="OSM"?"OSM(山頂ノード)" : g._src==="GSI"?"地理院地図" : g._src==="OM"?"Open-Meteo" : "web";
+    const elTxt = g.elevation!=null?`参考標高${Math.round(g.elevation)}m`:"標高はGSIで取得";
+    const tail = EXPECT_ELEV!=null ? "予報取得時にDEM標高で座標照合するよ。" : "取得時にGSI実標高で気温補正。座標が山頂とズレてたら手で直してね。";
+    setStatus(`📍 ${g.name}（${srcN}・${elTxt}）をセット。${tail}`,false);
   }
 }
 
@@ -863,6 +936,17 @@ function ensWindMembers(){
 }
 
 // ---- render ----
+// DEM実標高 vs 登録(期待)標高の照合結果。画面メタとコピペ文面で共用（150m差で⚠＝座標が山頂を外してる疑い）
+function demVerdict(){
+  if(EXPECT_ELEV==null || !DATA || DATA.meta.elev==null) return null;
+  const elev=Math.round(DATA.meta.elev);
+  const diff=Math.round(Math.abs(DATA.meta.elev-EXPECT_ELEV));
+  const srcLbl=(DATA.gsiElev!=null)?"GSI実標高":"実標高(DEM)";
+  const ok=diff<=150;
+  return { ok, diff, elev, srcLbl,
+    okText:`✓ 標高照合OK（${srcLbl}${elev}m≒登録${EXPECT_ELEV}m）`,
+    ngText:`⚠ 座標要確認（${srcLbl}${elev}m vs 登録${EXPECT_ELEV}m＝${diff}m差）` };
+}
 function renderAll(){ renderMeta(); renderDays(); renderFocus(); $("#results").classList.add("show"); }
 
 function renderMeta(){
@@ -876,13 +960,16 @@ function renderMeta(){
   const sun=(DATA.daily&&DATA.daily[FOCUS])?DATA.daily[FOCUS]:null;
   // DEM標高(この座標の実標高) vs 登録DB標高 の照合 ＝ 座標が山頂を指してるかのチェック
   let elevTag="";
-  if(EXPECT_ELEV!=null && m.elev!=null){
-    const diff=Math.round(Math.abs(m.elev-EXPECT_ELEV));
-    const srcLbl=(DATA.gsiElev!=null)?"GSI実標高":"実標高(DEM)";
-    elevTag = diff>150
-      ? `<span class="tag note">⚠ ${srcLbl}${Math.round(m.elev)}m vs 登録${EXPECT_ELEV}m＝${diff}m差・座標要確認</span>`
-      : `<span class="tag" style="color:var(--calm);border-color:rgba(86,197,150,.35)">✓ 標高照合OK（${srcLbl}${Math.round(m.elev)}m≒登録${EXPECT_ELEV}m）</span>`;
+  const v=demVerdict();
+  if(v){
+    elevTag = v.ok
+      ? `<span class="tag" style="color:var(--calm);border-color:rgba(86,197,150,.35)">${v.okText}</span>`
+      : `<span class="tag note">${v.ngText}・座標要確認</span>`;
   }
+  // 選択中の山（DB/プリセット）はrank・別名も表示
+  const selBadge = (SEL && SEL.source!=="manual" && SEL.rank!=null) ? rankBadge(SEL.rank) : "";
+  const selAlias = (SEL && SEL.aliases && SEL.aliases.length) ? ` <span class="cn-alias">／${SEL.aliases[0]}</span>` : "";
+  const placeName = (SEL && SEL.source!=="manual" && SEL.name) ? SEL.name : place;
   // アンサンブル確率＋遠望（FOCUS日・午後中心の要約を画面にも一行）
   let probLine="";
   if(DATA.ens||DATA.aq){
@@ -896,7 +983,7 @@ function renderMeta(){
     if(bits.length) probLine=`<div class="coords">📊 ${bits.join(" ／ ")}${DATA.ens?` <span style="opacity:.5">(アンサンブル${ensCount()}メンバー)</span>`:""}</div>`;
   }
   $("#meta").innerHTML=`
-    <div class="place">📍 ${place}</div>
+    <div class="place">📍 ${placeName}${selBadge}${selAlias}</div>
     <div class="coords">grid ${m.lat.toFixed(3)}, ${m.lng.toFixed(3)} · ${m.elev!=null?fmtElev(m.elev):"標高—"}${DATA.elevSrc?` <span style="opacity:.55">(${DATA.elevSrc})</span>`:""}</div>
     ${sun?`<div class="coords">☀ 日の出 ${hhmm(sun.sunrise)} ／ 🌙 日の入 ${hhmm(sun.sunset)}</div>`:''}
     ${probLine}
@@ -1106,8 +1193,17 @@ function renderSummary(){
     : (L.unknown
         ? `標高不明→暫定 ${L.main}hPa`
         : `主役 ${L.main}hPa(${pMain.altShort}・${pMain.models}モデル) ／ 補助 ${L.sub}hPa(${pSub.altShort})`);
-  let s=`=== ソナ予報インプット｜${place}(${m.elev!=null?Math.round(m.elev).toLocaleString()+"m":"標高—"}${DATA.elevSrc?"・"+DATA.elevSrc:""}) ===\n`;
-  s+=`grid ${m.lat.toFixed(3)},${m.lng.toFixed(3)} / 取得 ${f.getMonth()+1}/${f.getDate()} ${hh}:${mm}JST(全球6h更新) / 全${DATA.dates.length}日分\n`;
+  // 山名（rank/別名つき）＋入力した山頂座標＋座標照合（ソナ側の二重チェック素材）
+  const selName = (SEL && SEL.source!=="manual" && SEL.name)
+    ? `${SEL.name}${(SEL.aliases&&SEL.aliases.length)?`／${SEL.aliases[0]}`:""}${(SEL.rank!=null&&RANKMETA[SEL.rank])?`・${RANKMETA[SEL.rank].label}`:""}`
+    : place;
+  const inLat=parseFloat($("#lat").value), inLng=parseFloat($("#lng").value);
+  const srcLabel = SEL ? ({meizan:"バックデータDB",preset:"プリセット",OSM:"OSM",GSI:"地理院地図",OM:"Open-Meteo",manual:"手入力",web:"web"}[SEL.source]||SEL.source) : "—";
+  const v=demVerdict();
+  let s=`=== ソナ予報インプット｜${selName}(${m.elev!=null?Math.round(m.elev).toLocaleString()+"m":"標高—"}${DATA.elevSrc?"・"+DATA.elevSrc:""}) ===\n`;
+  s+=`山頂座標 ${isNaN(inLat)?"—":inLat.toFixed(5)},${isNaN(inLng)?"—":inLng.toFixed(5)}（入力＝座標照合用・出所:${srcLabel}）／ grid ${m.lat.toFixed(3)},${m.lng.toFixed(3)}（モデル格子）\n`;
+  s+=`座標照合: ${v?(v.ok?v.okText:v.ngText+"＝山頂を外してる疑い、予報前に座標確認推奨"):"照合なし（バックデータ外/手入力＝ソナ側でDEM裏取り推奨）"}\n`;
+  s+=`取得 ${f.getMonth()+1}/${f.getDate()} ${hh}:${mm}JST(全球6h更新) / 全${DATA.dates.length}日分\n`;
   s+=`モデル順: ECMWF / GFS / GSM / MSM / ICON（5モデル）\n`;
   s+=`稜線の風の読み: ${lvlNote}\n`;
   s+=`集計表示: このテキストは中央値とMAXを常に併記（括弧 MAX=悲観・割れた日に最悪を拾う値）※画面の表はプルダウンで片方表示だが、ソナへの素材は両方渡す\n`;
@@ -1280,8 +1376,11 @@ $("#geo").onclick=geocode;
 $("#copy").onclick=copySummary;
 $("#agg").onchange=function(){ AGG_MODE=this.value; if(DATA){ renderTable(); } }; // 表だけ切替（コピペ文面は常時 中央値/MAX 併記＝AGG_MODE非依存なので再描画不要）
 $("#qname").addEventListener("keydown",e=>{ if(e.key==="Enter") geocode(); });
-// 座標・標高を手入力したらDB標高照合を無効化（手入力値は登録DBと無関係なため）
-["#lat","#lng","#elev"].forEach(id=>$(id).addEventListener("input",()=>{ EXPECT_ELEV=null; }));
+// 座標・標高を手入力したらDB標高照合を無効化（手入力値は登録DBと無関係なため）＋出所をmanualに
+["#lat","#lng","#elev"].forEach(id=>$(id).addEventListener("input",()=>{
+  EXPECT_ELEV=null;
+  SEL={name:($("#qname").value.trim()||"指定地点"), rank:null, aliases:[], lat:parseFloat($("#lat").value), lng:parseFloat($("#lng").value), source:"manual"};
+}));
 </script>
 </body>
 </html>
