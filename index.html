@@ -213,7 +213,7 @@ footer a{color:var(--mist)}
 <div class="wrap">
 
   <p class="eyebrow">multi-model ridge weather</p>
-  <h1>⛰ ソナ予報 フェッチャー <span class="ver">v2.5</span></h1><!-- 版ルール: 挙動仕様が変わる改修で0.1上げる（表示・管理はここ1箇所） -->
+  <h1>⛰ ソナ予報 フェッチャー <span class="ver">v2.6</span></h1><!-- 版ルール: 挙動仕様が変わる改修で0.1上げる（表示・管理はここ1箇所） -->
   <p class="sub">山を指定 → 5モデル（ECMWF / GFS / JMA GSM / MSM / ICON）の稜線気象を取得。判断はソナ（チャット）が組む。</p>
 
   <!-- INPUT -->
@@ -922,7 +922,7 @@ async function fetchEnsemble(lat,lng,days,elev){
   try{
     const vs="cape,precipitation,temperature_2m,cloud_cover_low,wind_speed_925hPa,wind_speed_850hPa,wind_speed_700hPa";
     const elevPart=(elev!=null&&isFinite(elev))?`&elevation=${Math.round(elev)}`:"";  // 気温の標高補正をGSI標高と揃える
-    const u=`https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lng}${elevPart}&hourly=${vs}&models=gfs_seamless,ecmwf_ifs025&timezone=Asia%2FTokyo&forecast_days=${days}`;
+    const u=`https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lng}${elevPart}&hourly=${vs}&models=gfs_seamless,ecmwf_ifs025&timezone=Asia%2FTokyo&wind_speed_unit=ms&forecast_days=${days}`;
     const r=await fetchT(u,8000); if(!r.ok) return null; // 補助レイヤーが本体表示を巻き添えにしない上限（fail-softはcatchで担保済み・2026/7）
     const j=await r.json(); const h=j.hourly||{};
     // メンバーキーは cape_member01_ncep_gefs_seamless 等（番号が真ん中・モデルID可変）。baseで始まる「値の入った」配列を全部=全メンバーとして拾う
