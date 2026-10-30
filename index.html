@@ -213,7 +213,7 @@ footer a{color:var(--mist)}
 <div class="wrap">
 
   <p class="eyebrow">multi-model ridge weather</p>
-  <h1>⛰ ソナ予報 フェッチャー <span class="ver">v3.0</span></h1><!-- 版ルール: 挙動仕様が変わる改修で0.1上げる（表示・管理はここ1箇所） -->
+  <h1>⛰ ソナ予報 フェッチャー <span class="ver">v3.1</span></h1><!-- 版ルール: 挙動仕様が変わる改修で0.1上げる（表示・管理はここ1箇所） -->
   <p class="sub">山を指定 → 5モデル（ECMWF / GFS / JMA GSM / MSM / ICON）の稜線気象を取得。判断はソナ（チャット）が組む。</p>
 
   <!-- INPUT -->
@@ -277,6 +277,15 @@ footer a{color:var(--mist)}
     </div>
 
     <div class="panel">
+      <div class="sum-head">
+        <p class="panel-head" style="margin:0">📋 ソナに渡すテキスト</p>
+        <button class="btn-ghost" id="copy">コピー</button>
+      </div>
+      <div id="summary"></div>
+      <p class="cape-foot">これをチャットに貼れば、ソナが時間帯別の眺望・雷・行動可否を判断して予報を組むよ。</p>
+    </div>
+
+    <div class="panel">
       <p class="panel-head">⛈ 雷：燃料 CAPE と蓋 CIN <span class="hint">CAPE=3モデル午後最大／CIN=GFS日中中央値</span></p>
       <div class="cape-grid" id="cape"></div>
       <p class="cape-foot">CAPEは雷の燃料、CINは発雷を抑える蓋（小さいほど薄い）。<b style="color:var(--frost)">CAPE大 × CIN小 × 午後の日射</b>が揃う時が雷の本番。蓋が厚い日はCAPEが高くても持ちやすい。</p>
@@ -293,15 +302,6 @@ footer a{color:var(--mist)}
         <i><span class="swatch" style="background:var(--alert)"></span>25+</i>
         <i style="color:var(--mist)">m/s</i>
       </div>
-    </div>
-
-    <div class="panel">
-      <div class="sum-head">
-        <p class="panel-head" style="margin:0">📋 ソナに渡すテキスト</p>
-        <button class="btn-ghost" id="copy">コピー</button>
-      </div>
-      <div id="summary"></div>
-      <p class="cape-foot">これをチャットに貼れば、ソナが時間帯別の眺望・雷・行動可否を判断して予報を組むよ。</p>
     </div>
 
   </div>
